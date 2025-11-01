@@ -46,7 +46,10 @@ def generate_image(
         config_path="/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/transformer_layer_config.yaml",
     )
     #********************************************************************************************************************
-
+    import types
+    from reorder_utils import customized_forward
+    pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
+    
     if ratio != 0:
         apply_patch(
             pipeline,
@@ -64,7 +67,7 @@ def generate_image(
     end_event = torch.cuda.Event(enable_timing=True)
     start_event.record()
 
-    stable_diffusion_output = pipeline.customized_forward(
+    stable_diffusion_output = pipeline(
         prompt=prompt,
         height=height,
         width=width,

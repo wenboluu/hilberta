@@ -188,6 +188,11 @@ def apply_patch(
             "sliding_method": "stay",
         },
     }
+    
+    import types
+    from reorder_utils import customized_forward
+    model.transformer.forward = types.MethodType(customized_forward, model.transformer)
+
 
     make_tome_block_fn = make_diffusers_flux_tome_block
     make_single_tome_block_fn = make_flux_single_block
