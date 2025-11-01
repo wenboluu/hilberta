@@ -26,33 +26,6 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
             )
             joint_attention_kwargs = joint_attention_kwargs or {}
 
-            # from fvcore.nn import FlopCountAnalysis
-            # import torch.nn as nn
-            # class AttnWrapper(nn.Module):
-            #     def __init__(self, attn_module):
-            #         super().__init__()
-            #         self.attn = attn_module
-
-            #     def forward(self, norm_hidden_states, norm_encoder_hidden_states, image_rotary_emb, **joint_attention_kwargs):
-            #         return self.attn(
-            #             hidden_states=norm_hidden_states,
-            #             encoder_hidden_states=norm_encoder_hidden_states,
-            #             image_rotary_emb=image_rotary_emb,
-            #             **joint_attention_kwargs,
-            #         )
-                
-            # inputs = (norm_hidden_states, norm_encoder_hidden_states, image_rotary_emb, joint_attention_kwargs)
-
-            # attn_model = AttnWrapper(self.attn)
-            # flops = FlopCountAnalysis(
-            #     attn_model,
-            #     (norm_hidden_states, norm_encoder_hidden_states, image_rotary_emb),
-            #     **joint_attention_kwargs
-            # )            
-            # print(flops.total())
-
-            # os._exit(0)
-
             # Attention.
             attn_output, context_attn_output = self.attn(
                 hidden_states=norm_hidden_states,
@@ -60,7 +33,6 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
                 image_rotary_emb=image_rotary_emb,
                 **joint_attention_kwargs,
             )
-        
 
             # Process attention outputs for the `hidden_states`.
             attn_output = gate_msa.unsqueeze(1) * attn_output
@@ -92,7 +64,6 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
 
 
 def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
-    # README: This version merge attention only, do not merge MLP.
     class ToMeBlock(block_class):
         _parent = block_class
 
@@ -128,22 +99,8 @@ def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.
             from utils import apply_rotary_emb
             rope_hidden_states = apply_rotary_emb(image_hidden_states.reshape(image_hidden_states.shape[0], -1, image_hidden_states.shape[1], 128), cos_sin_image, self._tome_info)
             rope_hidden_states = rope_hidden_states.transpose(1,2).reshape(image_hidden_states.shape[0], image_hidden_states.shape[1], -1)
-            # start_event = torch.cuda.Event(enable_timing=True)
-            # end_event = torch.cuda.Event(enable_timing=True)
-            # start_event.record()
+
             merge_image, unmerge_image = compute_merge_general(rope_hidden_states, "image" , cos_sin_image, self._tome_info)
-            # end_event.record()
-            # torch.cuda.synchronize()
-            # if merge_image != False:
-            #     elapsed_time_ms = start_event.elapsed_time(end_event)
-            #     file_path = "./timing/compute_merge_in_single.jsonl"
-            #     os.makedirs(os.path.dirname(file_path), exist_ok=True)  # 自动创建目录（如果没有）
-            #     with open(file_path, "a") as log_file:
-            #         log_file.write(json.dumps({"elapsed_time_ms": elapsed_time_ms}) + "\n")
-
-            #         print(f"compute_merge_general elapsed_time_ms: {elapsed_time_ms:.3f} ms")
-
-            # ############################################################################################################
 
             if merge_image == False:
                 merge_image = do_nothing
@@ -228,86 +185,23 @@ def apply_patch(
             "k":  num_tiles * 4,
             "merge_method": merge_method,
             "unet_scheduler": unet_scheduler,
-            "sliding_method": "down_right",            
-        },
-    }
-    transformer_model._tome_info_1 = {
-        "size": None,
-        "args": {
-            "ratio": ratio,
-            "max_downsample": max_downsample,
-            "sx": sx,
-            "sy": sy,
-            "use_rand": use_rand,
-            "generator": None,
-            "merge_attn": merge_attn,
-            "merge_crossattn": merge_crossattn,
-            "merge_mlp": merge_mlp,
-            "dst_selection": dst_selection,
-            "k":  num_tiles * 4,
-            "merge_method": merge_method,
-            "unet_scheduler": unet_scheduler,
-            "sliding_method": "stay",
-        },
-    }
-    transformer_model._tome_info_2 = {
-        "size": None,
-        "args": {
-            "ratio": ratio,
-            "max_downsample": max_downsample,
-            "sx": sx,
-            "sy": sy,
-            "use_rand": use_rand,
-            "generator": None,
-            "merge_attn": merge_attn,
-            "merge_crossattn": merge_crossattn,
-            "merge_mlp": merge_mlp,
-            "dst_selection": dst_selection,
-            "k": num_tiles * 4,
-            "merge_method": merge_method,
-            "unet_scheduler": unet_scheduler,
-            "sliding_method": "down_left",
-        },
-    }
-    transformer_model._tome_info_3 = {
-        "size": None,
-        "args": {
-            "ratio": ratio,
-            "max_downsample": max_downsample,
-            "sx": sx,
-            "sy": sy,
-            "use_rand": use_rand,
-            "generator": None,
-            "merge_attn": merge_attn,
-            "merge_crossattn": merge_crossattn,
-            "merge_mlp": merge_mlp,
-            "dst_selection": dst_selection,
-            "k": num_tiles,
-            "merge_method": merge_method,
-            "unet_scheduler": unet_scheduler,
             "sliding_method": "stay",
         },
     }
 
-    tome_info_list = [ transformer_model._tome_info, transformer_model._tome_info_1, transformer_model._tome_info_2, transformer_model._tome_info_3]
-
-    count = 0
     make_tome_block_fn = make_diffusers_flux_tome_block
     make_single_tome_block_fn = make_flux_single_block
 
     for _, module in transformer_model.named_modules():
         if isinstance_str(module, "FluxTransformerBlock"):
             module.__class__ = make_tome_block_fn(module.__class__)
-            module._tome_info = tome_info_list[count % 4]
+            module._tome_info = transformer_model._tome_info
             module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
             module.attn.processor._tome_info = module._tome_info
-            count += 1 # Add count here but not in the outer for loop since there are some other blocks
         elif isinstance_str(module, "FluxSingleTransformerBlock"):
             module.__class__ = make_single_tome_block_fn(module.__class__)
-            module._tome_info = tome_info_list[count % 4]
-            count += 1
+            module._tome_info = transformer_model._tome_info
     return model
-
 
 def remove_patch(model: torch.nn.Module):
     """Removes a patch from a ToMe Diffusion module if it was already patched."""
@@ -319,4 +213,3 @@ def remove_patch(model: torch.nn.Module):
             module.__class__ = module._parent
 
     return model
-

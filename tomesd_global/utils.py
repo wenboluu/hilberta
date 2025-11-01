@@ -33,75 +33,6 @@ def init_generator(device: torch.device, fallback: torch.Generator = None):
         else:
             return fallback
 
-
-def split_inverse_concat(tensor: torch.Tensor) -> torch.Tensor:
-    """
-    Split the input tensor along the batch dimension into two matrices,
-    take the inverse of each matrix, and concatenate them back along the batch dimension.
-
-    Parameters:
-    tensor (torch.Tensor): The input tensor of shape (batch_size, n, n), assumed to be invertible.
-
-    Returns:
-    torch.Tensor: A tensor where each split matrix has been inverted and concatenated back along the batch dimension.
-    """
-    # Split the tensor along the batch dimension into two parts
-    batch_size = tensor.shape[0]
-    mid_point = batch_size // 2
-
-    # First and second split tensors
-    tensor1 = tensor[:mid_point, :, :]
-    tensor2 = tensor[mid_point:, :, :]
-
-    # Take the inverse of each split tensor
-    tensor1_inv = torch.inverse(tensor1)
-    tensor2_inv = torch.inverse(tensor2)
-
-    # Concatenate them back along the batch dimension
-    result = torch.cat([tensor1_inv, tensor2_inv], dim=0)
-
-    return result
-
-
-# QR-based pseudoinverse function
-def qr_based_pseudoinverse(A: torch.Tensor) -> torch.Tensor:
-    """
-    Computes the pseudoinverse of a matrix using QR factorization.
-
-    Parameters:
-    A (torch.Tensor): The input matrix.
-
-    Returns:
-    torch.Tensor: The pseudoinverse of the input matrix.
-    """
-    A = A.float()
-    _, m, n = A.shape
-
-    Q, R = torch.linalg.qr(A)
-    R1 = R[:n, :n]  # Get the square upper triangular matrix
-    R1_inv = torch.inverse(R1)
-    A_pinv = R1_inv @ Q[:, :n].transpose(-1, -2)
-    return A_pinv.half()
-
-
-def conjugate_transpose_inverse(A: torch.Tensor) -> torch.Tensor:
-    """
-    Computes a regularized pseudoinverse using the formula (A^T A)^(-1) A^T.
-    Suitable for matrices with linearly independent columns.
-
-    Parameters:
-    A (torch.Tensor): The input matrix.
-
-    Returns:
-    torch.Tensor: The regularized pseudoinverse of the input matrix.
-    """
-    A = A.float()
-    A_T = A.transpose(-1, -2)
-    A_pinv = split_inverse_concat(A_T @ A + torch.eye(A.shape[-1], device=A.device).unsqueeze(0) * 1e-4) @ A_T
-    # A_pinv = torch.inverse(A_T @ A) @ A_T
-    return A_pinv.half()
-
-
 def do_nothing(x: torch.Tensor, mode: str = None):
     return x
 
@@ -140,11 +71,9 @@ def apply_rotary_emb(
         cos, sin = cos.to(x.device), sin.to(x.device)
 
         if use_real_unbind_dim == -1:
-            # Used for flux, cogvideox, hunyuan-dit
             x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
             x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)
         elif use_real_unbind_dim == -2:
-            # Used for Stable Audio
             x_real, x_imag = x.reshape(*x.shape[:-1], 2, -1).unbind(-2)  # [B, S, H, D//2]
             x_rotated = torch.cat([-x_imag, x_real], dim=-1)
         else:
@@ -164,14 +93,6 @@ def apply_rotary_emb(
 
 
 def save_tensor_every_k_steps(tensor: torch.Tensor, prefix: str, output_dir: str, step: int):
-    """
-    参数:
-        tensor (torch.Tensor): 需要保存的 tensor.
-        output_dir (str): 输出目录.
-        step (int): 当前的步数.
-    """
-
-    # 如果目录不存在，则创建目录
     os.makedirs(output_dir, exist_ok=True)
     
     existing_files = [f for f in os.listdir(output_dir)
@@ -181,10 +102,9 @@ def save_tensor_every_k_steps(tensor: torch.Tensor, prefix: str, output_dir: str
 
     file_name = f"{prefix}_{new_suffix}.pt"
     save_path = os.path.join(output_dir, file_name)
-    # 保存 tensor
     torch.save(tensor, save_path)
     print(f"[Step {step}]")
-    return 
+    return
 
 
 def fold_with_indices(x, num_tiles):
@@ -269,13 +189,6 @@ def reconstruct_new_rope_emb(A, rope_emb, average_method='weighted'):
     # topk_indices has shape [k, d, 3]. We add an extra dimension at the end to match the embedding dim:
     # New index shape: [k, d, 3, c]
     index_for_gather = topk_indices.unsqueeze(-1).expand(-1, -1, -1, c)
-
-    # print('')
-    # print('A shape:', A.shape)
-    # print('rope_emb_cos_unsq shape:', rope_emb_cos_unsq.shape)
-    # print('topk_indices shape:', topk_indices.shape)
-    # print('index_for_gather shape:', index_for_gather.shape)
-    # os._exit(0)
     
     # Gather along the n dimension (dim=2) using the prepared index.
     # The resulting gathered tensors will have shape [k, d, 3, c].
@@ -318,11 +231,6 @@ def reconstruct_new_rope_emb(A, rope_emb, average_method='weighted'):
     else:
         raise ValueError("average_method must be either 'weighted' or 'direct'")
     
-    # Step 5: Reconstruct the new rope embedding using the averaged angle.
-    # The new rope embedding is constructed by taking:
-    #   Channel 0: cos(avg_angle)
-    #   Channel 1: sin(avg_angle)
-    # This yields a tensor of shape [2, k, d, c].
     new_rope_emb = torch.stack([torch.cos(avg_angle), torch.sin(avg_angle)], dim=0)
     
     return new_rope_emb

@@ -43,7 +43,7 @@ def generate_image(
         dst_recompute_timesteps = recompute_step,
         attn_recompute_timesteps = recompute_step,
         merge_step = merge_step,
-        config_path="/home/sz3684/diffusion/flux_svd_iccv/tomesd_global/flux_dev_copy.yaml",
+        config_path="/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/transformer_layer_config.yaml",
     )
     #********************************************************************************************************************
 
@@ -57,15 +57,14 @@ def generate_image(
             unet_scheduler=flux_scheduler,
             toma_variant=toma_variant,
         )
-        
+
     generator = torch.Generator(device=device).manual_seed(random_seed)
 
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
     start_event.record()
 
-
-    stable_diffusion_output = pipeline(
+    stable_diffusion_output = pipeline.customized_forward(
         prompt=prompt,
         height=height,
         width=width,
@@ -165,8 +164,8 @@ if __name__ == "__main__":
     import shutil
     from pathlib import Path
 
-    if os.path.exists('/home/sz3684/diffusion/flux_svd_iccv/tensors/'):
-        shutil.rmtree('/home/sz3684/diffusion/flux_svd_iccv/tensors/')
+    if os.path.exists('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tensors/'):
+        shutil.rmtree('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tensors/')
 
     def load_config(config_path):
         """Load configuration from YAML file"""
@@ -181,7 +180,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config", 
         type=str,
-        default="/home/sz3684/diffusion/flux_svd_iccv/tomesd_global/config.yaml",
+        default="/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml",
         help="Path to configuration YAML file"
     )
     args = parser.parse_args()
@@ -201,7 +200,7 @@ if __name__ == "__main__":
 
     recompute_step = [_ for _ in range(0, 35)]
     print('recompute_step', recompute_step)
-    merge_step = [_ for _ in range(10, 25, merge_step_interval)]
+    merge_step = [_ for _ in range(1, 35, merge_step_interval)]
     print('merge_step', merge_step)
 
     if toma_variant == "global_tile":
@@ -219,9 +218,10 @@ if __name__ == "__main__":
         prompt_list = prompt_list
         seed_list = seed_list
         dst_method = dst_method
-        output_folder = f"/home/sz3684/diffusion/flux_svd_iccv/output/{ratio}"
+        output_folder = f"/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/output/{toma_variant}/{ratio}"
         results_file_path = f"time.md"
         device = "cuda:0"
+
 
         pipeline = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev",

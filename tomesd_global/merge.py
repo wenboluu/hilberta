@@ -29,7 +29,6 @@ def bipartite_soft_matching_random2d_general(
         if_recompute_attn, if_not_merge = unet_scheduler.step_for_image()
     elif key_word == "text":
         if_recompute_attn, if_not_merge = unet_scheduler.step_for_text()
-        dst_selection = "global_stripe_wise_facility"
         return False, False
 
     if if_not_merge:
@@ -43,32 +42,12 @@ def bipartite_soft_matching_random2d_general(
     H = W = int(N ** 0.5)
     tile_len = int(H // (num_of_tiles ** 0.5))
 
-    # import pdb
-    # pdb.set_trace()
-
     gather = (
         mps_gather_workaround
         if x.device.type == "mps"
         else torch.gather
     )
 
-    from utils import index_shift_for_tile_sliding
-    # def index_shift_for_tile_sliding(x, tile_len, flag = None):
-        # print('I am here')
-        # return x
-
-    if sliding_method == 'up_right':
-        opposite_method = 'down_left'
-    elif sliding_method == 'down_left':
-        opposite_method = 'up_right'
-    elif sliding_method == 'up_left':
-        opposite_method = 'down_right'
-    elif sliding_method == 'down_right':
-        opposite_method = 'up_left'
-    elif sliding_method == 'stay':
-        opposite_method = 'stay'
-        
-    x = index_shift_for_tile_sliding(x, tile_len, sliding_method)
     with torch.no_grad():
 
         num_dst = (w // sx) * (h // sy) if dst_selection == "original" else N - r
@@ -199,24 +178,20 @@ def bipartite_soft_matching_random2d_general(
         return torch.bmm(A_inv, x_stacked).reshape(B, -1, C)
     
     def tile_wise_merge(x: torch.Tensor) -> torch.Tensor:
-        x_slided = index_shift_for_tile_sliding(x, tile_len, sliding_method)
-        x_reshaped, _ = fold_with_indices(x_slided, num_of_tiles)
+        x_reshaped, _ = fold_with_indices(x, num_of_tiles)
 
         x_merged = A @ x_reshaped
         x_merged = x_merged.reshape(B, -1, C)
 
         # Notice that the dst_idx is temporarily not used here so there are no corresponding indices shift operations
-        x_merged = index_shift_for_tile_sliding(x_merged, tile_len, opposite_method)
         return x_merged.reshape(B, -1, C), dst_idx, image_rotary_emb
 
     def tile_wise_unmerge(x: torch.Tensor) -> torch.Tensor:
         num_tiles = A_inv.shape[1]
-        x = index_shift_for_tile_sliding(x, tile_len, sliding_method)
         x = x.reshape(B, num_tiles, -1, C)
         res = A_inv @ x
 
         unfold_x = unfold_with_indices(res, flatten_idx)
-        unfold_x = index_shift_for_tile_sliding(unfold_x, tile_len, opposite_method)
         return unfold_x
     
     if dst_selection == "local_stripe_wise_facility":

@@ -3,7 +3,7 @@ ratio_list: [0]
 num_tiles: 16
 prompt_list: ["sheep"]
 seed_list: [776]
-toma_variant: "global_tile"
+toma_variant: "local_stripe"
 num_of_inference_steps: 35
 remark: "New_RoPE"
-merge_step_interval: 1
+merge_step_interval: 3
