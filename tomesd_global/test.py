@@ -1,6 +1,6 @@
 import torch
 
-def tile_wise_batched_facility(x, r, num_tiles):
+def tile(x, num_tiles):
     B, HW, C = x.shape
     H = W = int(HW**0.5)
 
@@ -14,17 +14,16 @@ def tile_wise_batched_facility(x, r, num_tiles):
     )
     x_reshaped = x_reshaped.reshape(-1, tile_side_len**2, C)
     x_reshaped = x_reshaped.reshape(B, HW, C)
-    print("x_reshaped shape:", x_reshaped.shape)
 
     return x_reshaped 
 
-def untile_wise_batched_facility(x_tiled, num_tiles, image_hw):
+def untile(x_tiled, num_tiles):
     """
     x_tiled: (B * num_tiles, tile_side², C)
     Returns: (B, H*W, C)
     """
-    B, tile_area, C = x_tiled.shape
-    H = W = image_hw
+    B, HW, C = x_tiled.shape
+    H = W = int(HW**0.5)
     num_tiles_per_side = int(num_tiles**0.5)
     tile_side_len = H // num_tiles_per_side
 
@@ -47,19 +46,18 @@ x = torch.arange(H * W).reshape(1, H * W, C).float()
 num_tiles = 16
 r = 8 
 
-tiles = tile_wise_batched_facility(x, r, num_tiles)
+tiles = tile(x, num_tiles)
 
-print(x.view(1, H, W))
+print(x.reshape(-1, H, W))
 
-print(tiles.view(1, H, W))
+print(tiles.reshape(-1, H, W))
 
-untile = untile_wise_batched_facility(
+untile = untile(
     tiles,
-    num_tiles=num_tiles,
-    image_hw=H
+    num_tiles=num_tiles
 )
 
-print(untile.view(1, H, W))  
+print(untile.reshape(-1, H, W))  
 print(torch.allclose(
     x,
     untile,

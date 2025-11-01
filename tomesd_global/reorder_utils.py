@@ -1,7 +1,7 @@
 import torch
 
 from typing import Any, Dict, Optional, Tuple, Union
-
+import yaml
 import numpy as np
 import torch
 import torch.nn as nn
@@ -94,6 +94,17 @@ def customized_forward(
         If `return_dict` is True, an [`~models.transformer_2d.Transformer2DModelOutput`] is returned, otherwise a
         `tuple` where the first element is the sample tensor.
     """
+
+    def load_config(config_path):
+        """Load configuration from YAML file"""
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        return config
+    
+    config = load_config("/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml")
+
+    num_tiles = config['num_tiles'] if 'num_tiles' in config else 16
+
     if joint_attention_kwargs is not None:
         joint_attention_kwargs = joint_attention_kwargs.copy()
         lora_scale = joint_attention_kwargs.pop("scale", 1.0)
@@ -148,105 +159,57 @@ def customized_forward(
     rotary_emb_text_0 = image_rotary_emb_1[:512, :]
     rotary_emb_text_1 = image_rotary_emb_2[:512, :]
 
-    rotary_emb_image_0 = tile(rotary_emb_image_0.unsqueeze(0), 16).squeeze(0)  
-    rotary_emb_image_1 = tile(rotary_emb_image_1.unsqueeze(0), 16).squeeze(0) 
+    rotary_emb_image_0 = tile(rotary_emb_image_0.unsqueeze(0), num_tiles).squeeze(0)  
+    rotary_emb_image_1 = tile(rotary_emb_image_1.unsqueeze(0), num_tiles).squeeze(0) 
 
     image_rotary_emb_1 = torch.cat([rotary_emb_text_0, rotary_emb_image_0], dim=0)
+    image_rotary_emb_1 = image_rotary_emb_1.reshape(num_tiles, -1, image_rotary_emb_1.shape[-1]) 
+
     image_rotary_emb_2 = torch.cat([rotary_emb_text_1, rotary_emb_image_1], dim=0)
+    image_rotary_emb_2 = image_rotary_emb_2.reshape(num_tiles, -1, image_rotary_emb_2.shape[-1])
 
     image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
 
-    hidden_states = tile(hidden_states, 16)
+    hidden_states = tile(hidden_states, num_tiles)
     #########################################################################################################
-    print('')
-    print('tile')
+    
+    B, N, C = hidden_states.shape
+
+    encoder_hidden_states = encoder_hidden_states.reshape(B*num_tiles, -1, encoder_hidden_states.shape[-1]) if encoder_hidden_states is not None else None
+    hidden_states = hidden_states.reshape(B * num_tiles, -1, hidden_states.shape[-1]) 
+
+
+    hidden_states = hidden_states.contiguous()
+
+    # import pdb; pdb.set_trace()
+
     for index_block, block in enumerate(self.transformer_blocks):
-        if self.training and self.gradient_checkpointing:
-
-            def create_custom_forward(module, return_dict=None):
-                def custom_forward(*inputs):
-                    if return_dict is not None:
-                        return module(*inputs, return_dict=return_dict)
-                    else:
-                        return module(*inputs)
-
-                return custom_forward
-
-            ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-            encoder_hidden_states, hidden_states = torch.utils.checkpoint.checkpoint(
-                create_custom_forward(block),
-                hidden_states,
-                encoder_hidden_states,
-                temb,
-                image_rotary_emb,
-                **ckpt_kwargs,
-            )
-
-        else:
-            encoder_hidden_states, hidden_states = block(
-                hidden_states=hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                temb=temb,
-                image_rotary_emb=image_rotary_emb,
-                joint_attention_kwargs=joint_attention_kwargs,
-            )
-
-        # controlnet residual
-        if controlnet_block_samples is not None:
-            interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
-            interval_control = int(np.ceil(interval_control))
-            # For Xlabs ControlNet.
-            if controlnet_blocks_repeat:
-                hidden_states = (
-                    hidden_states + controlnet_block_samples[index_block % len(controlnet_block_samples)]
-                )
-            else:
-                hidden_states = hidden_states + controlnet_block_samples[index_block // interval_control]
+        encoder_hidden_states, hidden_states = block(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            temb=temb,
+            image_rotary_emb=image_rotary_emb,
+            joint_attention_kwargs=joint_attention_kwargs,
+        )
 
     #########################################################################################################
-    hidden_states = untile(hidden_states, 16)
-    print('untiled')
+    hidden_states = hidden_states.reshape(B, -1, C)  # (B, num_tiles, HW, C)
+    encoder_hidden_states = encoder_hidden_states.reshape(B, -1, encoder_hidden_states.shape[-1]) if encoder_hidden_states is not None else None
+    hidden_states = untile(hidden_states, num_tiles)
     #########################################################################################################
 
     hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
     for index_block, block in enumerate(self.single_transformer_blocks):
-        if self.training and self.gradient_checkpointing:
+        hidden_states = block(
+            hidden_states=hidden_states,
+            temb=temb,
+            image_rotary_emb=image_rotary_emb_clean,
+            joint_attention_kwargs=joint_attention_kwargs,
+        )
 
-            def create_custom_forward(module, return_dict=None):
-                def custom_forward(*inputs):
-                    if return_dict is not None:
-                        return module(*inputs, return_dict=return_dict)
-                    else:
-                        return module(*inputs)
+    hidden_states = hidden_states.reshape(B, -1, C)
 
-                return custom_forward
-
-            ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-            hidden_states = torch.utils.checkpoint.checkpoint(
-                create_custom_forward(block),
-                hidden_states,
-                temb,
-                image_rotary_emb,
-                **ckpt_kwargs,
-            )
-
-        else:
-            hidden_states = block(
-                hidden_states=hidden_states,
-                temb=temb,
-                image_rotary_emb=image_rotary_emb_clean,
-                joint_attention_kwargs=joint_attention_kwargs,
-            )
-
-        # controlnet residual
-        if controlnet_single_block_samples is not None:
-            interval_control = len(self.single_transformer_blocks) / len(controlnet_single_block_samples)
-            interval_control = int(np.ceil(interval_control))
-            hidden_states[:, encoder_hidden_states.shape[1] :, ...] = (
-                hidden_states[:, encoder_hidden_states.shape[1] :, ...]
-                + controlnet_single_block_samples[index_block // interval_control]
-            )
 
     hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :, ...]
 

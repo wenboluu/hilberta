@@ -66,8 +66,8 @@ def apply_rotary_emb(
     """
     if use_real:
         cos, sin = freqs_cis  # [S, D]
-        cos = cos[None, None]
-        sin = sin[None, None]
+        cos = cos.unsqueeze(1)
+        sin = sin.unsqueeze(1)
         cos, sin = cos.to(x.device), sin.to(x.device)
 
         if use_real_unbind_dim == -1:
@@ -80,7 +80,6 @@ def apply_rotary_emb(
             raise ValueError(f"`use_real_unbind_dim={use_real_unbind_dim}` but should be -1 or -2.")
 
         out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
-
         return out
     else:
         # used for lumina

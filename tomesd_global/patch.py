@@ -5,7 +5,7 @@ from typing import Type, Dict, Any, Tuple, Callable, Optional, Union, List
 import json 
 from merge import do_nothing
 from utils import isinstance_str, init_generator
-from customized_attention_processor import FluxAttnProcessor2_0_for_transformerblock_global, compute_merge_general, FluxAttnProcessor2_0_for_transformerblock_with_stripe_wise
+from customized_attention_processor import FluxAttnProcessor2_0_for_transformerblock_global
 
 def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
     class ToMeBlock(block_class):
@@ -34,7 +34,6 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
                 **joint_attention_kwargs,
             )
 
-            # Process attention outputs for the `hidden_states`.
             attn_output = gate_msa.unsqueeze(1) * attn_output
             hidden_states = hidden_states + attn_output
 
@@ -45,8 +44,6 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
             ff_output = gate_mlp.unsqueeze(1) * ff_output
 
             hidden_states = hidden_states + ff_output
-
-            # Process attention outputs for the `encoder_hidden_states`.
 
             context_attn_output = c_gate_msa.unsqueeze(1) * context_attn_output
             encoder_hidden_states = encoder_hidden_states + context_attn_output
@@ -74,72 +71,24 @@ def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.
             image_rotary_emb=None,
             joint_attention_kwargs=None,
         ):
-            
-            original_embedding = image_rotary_emb
-
-            # RoPE splitting for text and image
-            image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
-            rotary_emb_image_0 = image_rotary_emb_1[512:, :]
-            rotary_emb_image_1 = image_rotary_emb_2[512:, :]
-
-            rotary_emb_text_0 = image_rotary_emb_1[:512, :]
-            rotary_emb_text_1 = image_rotary_emb_2[:512, :]
-
-            cos_sin_image = torch.stack([rotary_emb_image_0, rotary_emb_image_1])
-            cos_sin_text = torch.stack([rotary_emb_text_0, rotary_emb_text_1])
-
             residual = hidden_states
             norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
-            hidden_states_copy = norm_hidden_states.clone()
-            # ############################################################################################################
-            # MERGE TEXT AND IMAGE SEPARATELY 
-            text_hidden_states = norm_hidden_states[:, :512, :]
-            image_hidden_states = norm_hidden_states[:, 512:, :]
-
-            from utils import apply_rotary_emb
-            rope_hidden_states = apply_rotary_emb(image_hidden_states.reshape(image_hidden_states.shape[0], -1, image_hidden_states.shape[1], 128), cos_sin_image, self._tome_info)
-            rope_hidden_states = rope_hidden_states.transpose(1,2).reshape(image_hidden_states.shape[0], image_hidden_states.shape[1], -1)
-
-            merge_image, unmerge_image = compute_merge_general(rope_hidden_states, "image" , cos_sin_image, self._tome_info)
-
-            if merge_image == False:
-                merge_image = do_nothing
-                unmerge_image = do_nothing
-            else:
-                image_hidden_states, dst_idx, image_rotary_emb = merge_image(image_hidden_states)
-
-            text_len = 512
-            text_rotary_emb = cos_sin_text
-
-            if merge_image == do_nothing:
-                rotary_emb = original_embedding
-            else: 
-                rotary_emb = torch.cat([text_rotary_emb, image_rotary_emb], dim=1)
-
-            norm_hidden_states = torch.cat([text_hidden_states, image_hidden_states], dim=1)
-
-            mlp_hidden_states = self.act_mlp(self.proj_mlp(hidden_states_copy))
-
+            mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
             joint_attention_kwargs = joint_attention_kwargs or {}
             attn_output = self.attn(
                 hidden_states=norm_hidden_states,
-                image_rotary_emb=rotary_emb,
+                image_rotary_emb=image_rotary_emb,
                 **joint_attention_kwargs,
             )
 
-            text_hidden_states = attn_output[:, :text_len, :]
-            image_hidden_states = attn_output[:, text_len:, :]
-
-            image_hidden_states = unmerge_image(image_hidden_states)
-            attn_output = torch.cat([text_hidden_states, image_hidden_states], dim=1)
-
             hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
             gate = gate.unsqueeze(1)
-            hidden_states = self.proj_out(hidden_states)
-            hidden_states = gate * hidden_states
+            hidden_states = gate * self.proj_out(hidden_states)
+
             hidden_states = residual + hidden_states
             if hidden_states.dtype == torch.float16:
                 hidden_states = hidden_states.clip(-65504, 65504)
+
             return hidden_states
 
     return ToMeBlock
@@ -193,7 +142,6 @@ def apply_patch(
     from reorder_utils import customized_forward
     model.transformer.forward = types.MethodType(customized_forward, model.transformer)
 
-
     make_tome_block_fn = make_diffusers_flux_tome_block
     make_single_tome_block_fn = make_flux_single_block
 
@@ -206,6 +154,8 @@ def apply_patch(
         elif isinstance_str(module, "FluxSingleTransformerBlock"):
             module.__class__ = make_single_tome_block_fn(module.__class__)
             module._tome_info = transformer_model._tome_info
+            # module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
+            # module.attn.processor._tome_info = module._tome_info
     return model
 
 def remove_patch(model: torch.nn.Module):

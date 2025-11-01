@@ -20,44 +20,6 @@ from merge import do_nothing, bipartite_soft_matching_random2d_general
 from utils import isinstance_str, init_generator, apply_rotary_emb
 
 
-
-def compute_merge_general(x: torch.Tensor, key_word, rope_emb, tome_info: Dict[str, Any]) -> Tuple[Callable, ...]:
-    args = tome_info["args"]
-
-    if args["ratio"] > 0:
-        _, N, C = x.shape
-        w = h = int(math.sqrt(N))
-        r = int(x.shape[1] * args["ratio"])
-
-        # Re-init the generator if it hasn't already been initialized or device has changed.
-        if args["generator"] is None:
-            args["generator"] = init_generator(x.device)
-        elif args["generator"].device != x.device:
-            args["generator"] = init_generator(x.device, fallback=args["generator"])
-
-        # If the batch size is odd, then it's not possible for prompted and unprompted images to be in the same
-        # batch, which causes artifacts with use_rand, so force it to be off.
-        use_rand = False if x.shape[0] % 2 == 1 else args["use_rand"]
-        m, u = bipartite_soft_matching_random2d_general(
-            x, 
-            w,
-            h,
-            args["sx"],
-            args["sy"],
-            r,
-            no_rand=not use_rand,
-            num_of_tiles=args["k"],
-            generator=args["generator"],
-            dst_selection=args["dst_selection"],
-            unet_scheduler=args["unet_scheduler"],
-            key_word=key_word,
-            rope_emb = rope_emb,
-            sliding_method = args["sliding_method"],
-        )
-    else:
-        m, u = (do_nothing, do_nothing)
-    return m, u
-
 class Attention(nn.Module):
     r"""
     A cross attention layer.
@@ -821,350 +783,79 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
         encoder_hidden_states: torch.FloatTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         image_rotary_emb: Optional[torch.Tensor] = None,
-        pos_embed: Optional[torch.FloatTensor] = None,
     ) -> torch.FloatTensor:
-
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
 
-        clean_hidden_states = hidden_states
+        # `sample` projections.
+        query = attn.to_q(hidden_states)
+        key = attn.to_k(hidden_states)
+        value = attn.to_v(hidden_states)
 
-        image_rotary_emb = torch.stack(image_rotary_emb, dim=0)
-
-        from utils import apply_rotary_emb
-        inner_dim = clean_hidden_states.shape[-1]
+        inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
-        rope_hidden_states = apply_rotary_emb(clean_hidden_states.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2), image_rotary_emb[:, 512:, :]).transpose(1,2).reshape(batch_size, -1, attn.heads * head_dim)
 
-        merge, unmerge = compute_merge_general(rope_hidden_states, "image" , image_rotary_emb[:, 512:, :] ,self._tome_info)
-        if merge == False:
-            batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
-            # `sample` projections.
-            query = attn.to_q(hidden_states)
-            key = attn.to_k(hidden_states)
-            value = attn.to_v(hidden_states)
+        if attn.norm_q is not None:
+            query = attn.norm_q(query)
+        if attn.norm_k is not None:
+            key = attn.norm_k(key)
 
-            inner_dim = key.shape[-1]
-            head_dim = inner_dim // attn.heads
+        # the attention in FluxSingleTransformerBlock does not use `encoder_hidden_states`
+        if encoder_hidden_states is not None:
+            # `context` projections.
 
-            query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+            encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
+            encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
+            encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
 
-            if attn.norm_q is not None:
-                query = attn.norm_q(query)
-            if attn.norm_k is not None:
-                key = attn.norm_k(key)
+            encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(
+                batch_size, -1, attn.heads, head_dim
+            ).transpose(1, 2)
+            encoder_hidden_states_key_proj = encoder_hidden_states_key_proj.view(
+                batch_size, -1, attn.heads, head_dim
+            ).transpose(1, 2)
+            encoder_hidden_states_value_proj = encoder_hidden_states_value_proj.view(
+                batch_size, -1, attn.heads, head_dim
+            ).transpose(1, 2)
 
-            # the attention in FluxSingleTransformerBlock does not use `encoder_hidden_states`
-            if encoder_hidden_states is not None:
-                # `context` projections.
-                encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
-                encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
-                encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
+            if attn.norm_added_q is not None:
+                encoder_hidden_states_query_proj = attn.norm_added_q(encoder_hidden_states_query_proj)
+            if attn.norm_added_k is not None:
+                encoder_hidden_states_key_proj = attn.norm_added_k(encoder_hidden_states_key_proj)
 
-                encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
-                encoder_hidden_states_key_proj = encoder_hidden_states_key_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
-                encoder_hidden_states_value_proj = encoder_hidden_states_value_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
+            # attention
+            query = torch.cat([encoder_hidden_states_query_proj, query], dim=2)
+            key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
+            value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
 
-                if attn.norm_added_q is not None:
-                    encoder_hidden_states_query_proj = attn.norm_added_q(encoder_hidden_states_query_proj)
-                if attn.norm_added_k is not None:
-                    encoder_hidden_states_key_proj = attn.norm_added_k(encoder_hidden_states_key_proj)
+        if image_rotary_emb is not None:
+            from utils import apply_rotary_emb
 
-                # attention
-                query = torch.cat([encoder_hidden_states_query_proj, query], dim=2)
-                key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
-                value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
+            # import pdb;pdb.set_trace()
 
-            if image_rotary_emb is not None:
-                from utils import apply_rotary_emb
+            query = apply_rotary_emb(query, image_rotary_emb)
+            key = apply_rotary_emb(key, image_rotary_emb)
 
-                query = apply_rotary_emb(query, image_rotary_emb)
-                key = apply_rotary_emb(key, image_rotary_emb)
-
-            hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
-            hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-            hidden_states = hidden_states.to(query.dtype)
-
-            if encoder_hidden_states is not None:
-                encoder_hidden_states, hidden_states = (
-                    hidden_states[:, : encoder_hidden_states.shape[1]],
-                    hidden_states[:, encoder_hidden_states.shape[1] :],
-                )
-
-                # linear proj
-                hidden_states = attn.to_out[0](hidden_states)
-                # dropout
-                hidden_states = attn.to_out[1](hidden_states)
-                encoder_hidden_states = attn.to_add_out(encoder_hidden_states)
-
-                return hidden_states, encoder_hidden_states
-            else:
-                return hidden_states
-        else:
-            # if you need to merge
-            merged_clean_hidden_states, dst_idx, image_rotary_emb_merged = merge(clean_hidden_states)
-
-            query = attn.to_q(merged_clean_hidden_states)
-            clean_key = attn.to_k(merged_clean_hidden_states)
-            clean_value = attn.to_v(merged_clean_hidden_states)
-
-            inner_dim = clean_key.shape[-1]
-            head_dim = inner_dim // attn.heads
-
-            query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            clean_key = clean_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            clean_value = clean_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-
-            if attn.norm_q is not None:
-                query = attn.norm_q(query)
-            if attn.norm_k is not None:
-                clean_key = attn.norm_k(clean_key)
-
-            if encoder_hidden_states is not None:
-                # `context` projections.
-                encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
-                encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
-                encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
-
-                encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
-                encoder_hidden_states_key_proj = encoder_hidden_states_key_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
-                encoder_hidden_states_value_proj = encoder_hidden_states_value_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
-
-                if attn.norm_added_q is not None:
-                    encoder_hidden_states_query_proj = attn.norm_added_q(encoder_hidden_states_query_proj)
-                if attn.norm_added_k is not None:
-                    encoder_hidden_states_key_proj = attn.norm_added_k(encoder_hidden_states_key_proj)
-
-                query = torch.cat([encoder_hidden_states_query_proj, query], dim=2)
-                key = torch.cat([encoder_hidden_states_key_proj, clean_key], dim=2)
-                value = torch.cat([encoder_hidden_states_value_proj, clean_value], dim=2)   
-
-                image_rotary_emb_for_prompt = image_rotary_emb[:, :512,:]
-
-            if image_rotary_emb is not None:
-                image_rotary_emb_merged = torch.cat([image_rotary_emb_for_prompt, image_rotary_emb_merged], dim=1)
-
-                query = apply_rotary_emb(query, image_rotary_emb_merged)
-                key = apply_rotary_emb(key, image_rotary_emb_merged)
-
-            hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
-            hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-            hidden_states = hidden_states.to(query.dtype)
-
-            text_hidden_states = hidden_states[:, :512, :]
-            image_hidden_states = hidden_states[:, 512:, :]
-            image_hidden_states = unmerge(image_hidden_states)
-            hidden_states = torch.cat([text_hidden_states, image_hidden_states], dim=1)
-
-            if encoder_hidden_states is not None:
-                encoder_hidden_states, hidden_states = (
-                    hidden_states[:, : encoder_hidden_states.shape[1]],
-                    hidden_states[:, encoder_hidden_states.shape[1] :],
-                )
-
-                # linear proj
-                hidden_states = attn.to_out[0](hidden_states)
-                # dropout
-                hidden_states = attn.to_out[1](hidden_states)
-                encoder_hidden_states = attn.to_add_out(encoder_hidden_states)
-
-                return hidden_states, encoder_hidden_states
-            else:
-                return hidden_states
-
-class FluxAttnProcessor2_0_for_transformerblock_with_stripe_wise:
-    """Attention processor used typically in processing the SD3-like self-attention projections."""
-
-    def __init__(self):
-        if not hasattr(F, "scaled_dot_product_attention"):
-            raise ImportError("FluxAttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
-
-    def __call__(
-        self,
-        attn: Attention,
-        hidden_states: torch.FloatTensor,
-        encoder_hidden_states: torch.FloatTensor = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        image_rotary_emb: Optional[torch.Tensor] = None,
-        pos_embed: Optional[torch.FloatTensor] = None,
-    ) -> torch.FloatTensor:
-
-        batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-
-        clean_hidden_states = hidden_states
+        hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
+        # hidden_states = query
+        hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+        hidden_states = hidden_states.to(query.dtype)
 
         if encoder_hidden_states is not None:
-            len_prompt = encoder_hidden_states.size(-2)
-            len_hidden = hidden_states.size(-2)
+            encoder_hidden_states, hidden_states = (
+                hidden_states[:, : encoder_hidden_states.shape[1]],
+                hidden_states[:, encoder_hidden_states.shape[1] :],
+            )
+
+            # linear proj
+            hidden_states = attn.to_out[0](hidden_states)
+            # dropout
+            hidden_states = attn.to_out[1](hidden_states)
+            encoder_hidden_states = attn.to_add_out(encoder_hidden_states)
+
+            return hidden_states, encoder_hidden_states
         else:
-            len_prompt = 0
-
-        image_rotary_emb = torch.stack(image_rotary_emb, dim=0)
-
-        merge, unmerge= compute_merge_general(clean_hidden_states, "image" , image_rotary_emb[:, 512:, :] ,self._tome_info)
-
-        if merge == False:
-            batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-
-            # `sample` projections.
-            query = attn.to_q(hidden_states)
-            key = attn.to_k(hidden_states)
-            value = attn.to_v(hidden_states)
-
-            inner_dim = key.shape[-1]
-            head_dim = inner_dim // attn.heads
-
-            query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-
-            if attn.norm_q is not None:
-                query = attn.norm_q(query)
-            if attn.norm_k is not None:
-                key = attn.norm_k(key)
-
-            # the attention in FluxSingleTransformerBlock does not use `encoder_hidden_states`
-            if encoder_hidden_states is not None:
-                # `context` projections.
-                encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
-                encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
-                encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
-
-                encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
-                encoder_hidden_states_key_proj = encoder_hidden_states_key_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
-                encoder_hidden_states_value_proj = encoder_hidden_states_value_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
-
-                if attn.norm_added_q is not None:
-                    encoder_hidden_states_query_proj = attn.norm_added_q(encoder_hidden_states_query_proj)
-                if attn.norm_added_k is not None:
-                    encoder_hidden_states_key_proj = attn.norm_added_k(encoder_hidden_states_key_proj)
-
-                # attention
-                query = torch.cat([encoder_hidden_states_query_proj, query], dim=2)
-                key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
-                value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
-
-            if image_rotary_emb is not None:
-                from utils import apply_rotary_emb
-
-                query = apply_rotary_emb(query, image_rotary_emb)
-                key = apply_rotary_emb(key, image_rotary_emb)
-
-            hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
-            hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-            hidden_states = hidden_states.to(query.dtype)
-
-            if encoder_hidden_states is not None:
-                encoder_hidden_states, hidden_states = (
-                    hidden_states[:, : encoder_hidden_states.shape[1]],
-                    hidden_states[:, encoder_hidden_states.shape[1] :],
-                )
-
-                # linear proj
-                hidden_states = attn.to_out[0](hidden_states)
-                # dropout
-                hidden_states = attn.to_out[1](hidden_states)
-                encoder_hidden_states = attn.to_add_out(encoder_hidden_states)
-
-                return hidden_states, encoder_hidden_states
-            else:
-                return hidden_states
-        else:
-            # if you need to merge
-            merged_clean_hidden_states, dst_idx, image_rotary_emb_merged = merge(clean_hidden_states)
-
-            query = attn.to_q(merged_clean_hidden_states)
-            clean_key = attn.to_k(merged_clean_hidden_states)
-            clean_value = attn.to_v(merged_clean_hidden_states)
-
-            inner_dim = clean_key.shape[-1]
-            head_dim = inner_dim // attn.heads
-
-            query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            clean_key = clean_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            clean_value = clean_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-
-            if attn.norm_q is not None:
-                query = attn.norm_q(query)
-            if attn.norm_k is not None:
-                clean_key = attn.norm_k(clean_key)
-
-            # the attention in FluxSingleTransformerBlock does not use `encoder_hidden_states`
-            if encoder_hidden_states is not None:
-                # `context` projections.
-                encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
-                encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
-                encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
-
-                encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
-                encoder_hidden_states_key_proj = encoder_hidden_states_key_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
-                encoder_hidden_states_value_proj = encoder_hidden_states_value_proj.view(
-                    batch_size, -1, attn.heads, head_dim
-                ).transpose(1, 2)
-
-                if attn.norm_added_q is not None:
-                    encoder_hidden_states_query_proj = attn.norm_added_q(encoder_hidden_states_query_proj)
-                if attn.norm_added_k is not None:
-                    encoder_hidden_states_key_proj = attn.norm_added_k(encoder_hidden_states_key_proj)
-
-                query = torch.cat([encoder_hidden_states_query_proj, query], dim=2)
-                key = torch.cat([encoder_hidden_states_key_proj, clean_key], dim=2)
-                value = torch.cat([encoder_hidden_states_value_proj, clean_value], dim=2)
-
-                image_rotary_emb_for_prompt = image_rotary_emb[:, :512,:]
-
-            if image_rotary_emb is not None:
-                from utils import apply_rotary_emb
-                image_rotary_emb_merged = torch.cat([image_rotary_emb_for_prompt, image_rotary_emb_merged], dim=1)
-
-                query = apply_rotary_emb(query, image_rotary_emb_merged)
-                key = apply_rotary_emb(key, image_rotary_emb_merged)
-
-            hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
-            hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-            hidden_states = hidden_states.to(query.dtype)
-
-            text_hidden_states = hidden_states[:, :512, :]
-            image_hidden_states = hidden_states[:, 512:, :]
-            image_hidden_states = unmerge(image_hidden_states)
-            hidden_states = torch.cat([text_hidden_states, image_hidden_states], dim=1)
-
-            if encoder_hidden_states is not None:
-                encoder_hidden_states, hidden_states = (
-                    hidden_states[:, : encoder_hidden_states.shape[1]],
-                    hidden_states[:, encoder_hidden_states.shape[1] :],
-                )
-
-                # linear proj
-                hidden_states = attn.to_out[0](hidden_states)
-                # dropout
-                hidden_states = attn.to_out[1](hidden_states)
-                encoder_hidden_states = attn.to_add_out(encoder_hidden_states)
-
-                return hidden_states, encoder_hidden_states
-            else:
-                return hidden_states
+            return hidden_states

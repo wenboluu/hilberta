@@ -46,19 +46,6 @@ def generate_image(
         config_path="/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/transformer_layer_config.yaml",
     )
     #********************************************************************************************************************
-    import types
-    from reorder_utils import customized_forward
-    pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
-
-    apply_patch(
-        pipeline,
-        ratio=ratio,
-        dst_selection=dst_selection,
-        num_tiles=num_tiles,
-        merge_method=merge_method,
-        unet_scheduler=flux_scheduler,
-        toma_variant=toma_variant,
-    )
 
     generator = torch.Generator(device=device).manual_seed(random_seed)
 
