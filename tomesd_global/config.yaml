@@ -1,0 +1,9 @@
+# config.yaml
+ratio_list: [0]
+num_tiles: 16
+prompt_list: ["sheep"]
+seed_list: [776]
+toma_variant: "global_tile"
+num_of_inference_steps: 35
+remark: "New_RoPE"
+merge_step_interval: 1

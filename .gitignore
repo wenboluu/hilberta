@@ -1,0 +1,11 @@
+# Ignore the tomesd_global_backup directory
+tomesd_global_backup/
+tensors/
+flux_todo/
+output/
+tomesd_global/__pycache__/
+
+# Ignore everything inside the directory, including hidden files
+tomesd_global_backup/**/*
+output/**/*
+flux_todo/**/*
