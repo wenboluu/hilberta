@@ -27,7 +27,7 @@ def tile(x, num_tiles):
         (HW * C, tile_side_len * H * C, tile_side_len * C, H * C, C, 1),
     )
     x_reshaped = x_reshaped.reshape(-1, tile_side_len**2, C)
-    x_reshaped = x_reshaped.reshape(B, HW, C)
+    x_reshaped = x_reshaped.reshape(B, HW, C).contiguous()
 
     return x_reshaped 
 
@@ -178,10 +178,7 @@ def customized_forward(
     encoder_hidden_states = encoder_hidden_states.reshape(B*num_tiles, -1, encoder_hidden_states.shape[-1]) if encoder_hidden_states is not None else None
     hidden_states = hidden_states.reshape(B * num_tiles, -1, hidden_states.shape[-1]) 
 
-
     hidden_states = hidden_states.contiguous()
-
-    # import pdb; pdb.set_trace()
 
     for index_block, block in enumerate(self.transformer_blocks):
         encoder_hidden_states, hidden_states = block(
@@ -192,24 +189,26 @@ def customized_forward(
             joint_attention_kwargs=joint_attention_kwargs,
         )
 
-    #########################################################################################################
-    hidden_states = hidden_states.reshape(B, -1, C)  # (B, num_tiles, HW, C)
-    encoder_hidden_states = encoder_hidden_states.reshape(B, -1, encoder_hidden_states.shape[-1]) if encoder_hidden_states is not None else None
-    hidden_states = untile(hidden_states, num_tiles)
-    #########################################################################################################
-
     hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
+
+    encoder_hidden_states = encoder_hidden_states.reshape(B, -1, C)
 
     for index_block, block in enumerate(self.single_transformer_blocks):
         hidden_states = block(
             hidden_states=hidden_states,
             temb=temb,
-            image_rotary_emb=image_rotary_emb_clean,
+            image_rotary_emb=image_rotary_emb,
             joint_attention_kwargs=joint_attention_kwargs,
         )
 
     hidden_states = hidden_states.reshape(B, -1, C)
 
+    #########################################################################################################
+    image_hidden_states = hidden_states[:, 512:, :]
+    text_hidden_states = hidden_states[:, :512, :]
+    image_hidden_states = untile(image_hidden_states, num_tiles)
+    hidden_states = torch.cat([text_hidden_states, image_hidden_states], dim=1) 
+    #########################################################################################################
 
     hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :, ...]
 

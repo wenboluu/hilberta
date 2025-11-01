@@ -1,8 +1,8 @@
 # config.yaml
 ratio_list: [0]
-num_tiles: 16
+num_tiles: 4
 prompt_list: ["sheep"]
-seed_list: [776]
+seed_list: [864]
 toma_variant: "local_stripe"
 num_of_inference_steps: 35
 remark: "New_RoPE"

@@ -39,7 +39,7 @@ def generate_image(
     )
     #********************************************************************************************************************
     flux_scheduler = FluxScheduler(
-        timesteps=35,
+        timesteps=28,
         dst_recompute_timesteps = recompute_step,
         attn_recompute_timesteps = recompute_step,
         merge_step = merge_step,
@@ -223,7 +223,6 @@ if __name__ == "__main__":
         output_folder = f"/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/output/{toma_variant}/{ratio}"
         results_file_path = f"time.md"
         device = "cuda:0"
-
 
         pipeline = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev",

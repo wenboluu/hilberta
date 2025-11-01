@@ -154,8 +154,8 @@ def apply_patch(
         elif isinstance_str(module, "FluxSingleTransformerBlock"):
             module.__class__ = make_single_tome_block_fn(module.__class__)
             module._tome_info = transformer_model._tome_info
-            # module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
-            # module.attn.processor._tome_info = module._tome_info
+            module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
+            module.attn.processor._tome_info = module._tome_info
     return model
 
 def remove_patch(model: torch.nn.Module):
