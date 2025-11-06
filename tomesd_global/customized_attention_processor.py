@@ -834,8 +834,6 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
         if image_rotary_emb is not None:
             from utils import apply_rotary_emb
 
-            # import pdb;pdb.set_trace()
-
             query = apply_rotary_emb(query, image_rotary_emb)
             key = apply_rotary_emb(key, image_rotary_emb)
 

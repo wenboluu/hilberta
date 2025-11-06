@@ -132,8 +132,8 @@ def evaluate_dst_selection(
             random_seed=seed,
             dst_selection=dst_selection,
             max_downsample=4,
-            height=1024,
-            width=1024,
+            height=2048,
+            width=2048,
             num_tiles=num_tiles,
             merge_method=merge_method,
             toma_variant=toma_variant,
@@ -210,7 +210,6 @@ if __name__ == "__main__":
         output_folder = f"/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/output/{toma_variant}/{ratio}"
         results_file_path = f"time.md"
         device = "cuda:0"
-
 
         pipeline = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev",

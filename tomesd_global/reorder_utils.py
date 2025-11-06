@@ -31,6 +31,32 @@ def tile(x, num_tiles):
 
     return x_reshaped 
 
+def tile_compare(x, r, num_tiles):
+    B, HW, C = x.shape
+    H = W = int(HW**0.5)
+
+    num_tiles_per_side = int(num_tiles**0.5)
+    tile_side_len = H // num_tiles_per_side
+
+    indices = torch.arange(HW, device=x.device).reshape(1, H, W, 1)
+    patch_indices = torch.as_strided(
+        indices,
+        (1, num_tiles_per_side, num_tiles_per_side, tile_side_len, tile_side_len, 1),
+        (HW * 1, tile_side_len * W * 1, tile_side_len * 1, W * 1, 1, 1),
+    )
+
+    x_reshaped = torch.as_strided(
+        x,
+        (1, num_tiles_per_side, num_tiles_per_side, tile_side_len, tile_side_len, C),
+        (HW * C, tile_side_len * H * C, tile_side_len * C, H * C, C, 1),
+    )
+    x_reshaped = x_reshaped.reshape(-1, tile_side_len**2, C)
+    x_reshaped = x_reshaped.reshape(B, HW, C)
+
+
+    return x_reshaped, patch_indices.reshape(-1, HW)
+
+
 def untile(x_tiled, num_tiles):
     """
     x_tiled: (B * num_tiles, tile_side², C)
@@ -148,37 +174,50 @@ def customized_forward(
 
     ids = torch.cat((txt_ids, img_ids), dim=0)
     image_rotary_emb = self.pos_embed(ids)
-    image_rotary_emb_clean = image_rotary_emb
-    
+
     #########################################################################################################
+    # Split rotary embeddings into text and image parts
     image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
 
-    rotary_emb_image_0 = image_rotary_emb_1[512:, :]
-    rotary_emb_image_1 = image_rotary_emb_2[512:, :]
+    text_emb_1, image_emb_1 = image_rotary_emb_1[:512], image_rotary_emb_1[512:]
+    text_emb_2, image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
 
-    rotary_emb_text_0 = image_rotary_emb_1[:512, :]
-    rotary_emb_text_1 = image_rotary_emb_2[:512, :]
+    # Tile the image embeddings across the number of tiles
+    tiled_image_emb_1 = tile(image_emb_1.unsqueeze(0), num_tiles).squeeze(0)
+    tiled_image_emb_2 = tile(image_emb_2.unsqueeze(0), num_tiles).squeeze(0)
 
-    rotary_emb_image_0 = tile(rotary_emb_image_0.unsqueeze(0), num_tiles).squeeze(0)  
-    rotary_emb_image_1 = tile(rotary_emb_image_1.unsqueeze(0), num_tiles).squeeze(0) 
+    # Concatenate text and tiled image embeddings, then reshape to (num_tiles, seq_len, dim)
+    text_emb_1 = text_emb_1.view(num_tiles, -1, text_emb_1.shape[-1])
+    tiled_image_emb_1 = tiled_image_emb_1.view(num_tiles, -1, tiled_image_emb_1.shape[-1])
+    image_rotary_emb_1 = torch.cat([text_emb_1, tiled_image_emb_1], dim=1)
 
-    image_rotary_emb_1 = torch.cat([rotary_emb_text_0, rotary_emb_image_0], dim=0)
-    image_rotary_emb_1 = image_rotary_emb_1.reshape(num_tiles, -1, image_rotary_emb_1.shape[-1]) 
+    text_emb_2 = text_emb_2.view(num_tiles, -1, text_emb_2.shape[-1])
+    tiled_image_emb_2 = tiled_image_emb_2.view(num_tiles, -1, tiled_image_emb_2.shape[-1])
+    image_rotary_emb_2 = torch.cat([text_emb_2, tiled_image_emb_2], dim=1)
 
-    image_rotary_emb_2 = torch.cat([rotary_emb_text_1, rotary_emb_image_1], dim=0)
-    image_rotary_emb_2 = image_rotary_emb_2.reshape(num_tiles, -1, image_rotary_emb_2.shape[-1])
-
+    # Pack the updated embeddings and tile the hidden states accordingly
     image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
-
     hidden_states = tile(hidden_states, num_tiles)
-    #########################################################################################################
-    
+
     B, N, C = hidden_states.shape
 
-    encoder_hidden_states = encoder_hidden_states.reshape(B*num_tiles, -1, encoder_hidden_states.shape[-1]) if encoder_hidden_states is not None else None
-    hidden_states = hidden_states.reshape(B * num_tiles, -1, hidden_states.shape[-1]) 
+    encoder_hidden_states = encoder_hidden_states.view(B*num_tiles, -1, encoder_hidden_states.shape[-1])
+    encoder_hidden_states = encoder_hidden_states[0].unsqueeze(0).repeat(B*num_tiles, 1, 1)
+    hidden_states = hidden_states.view(B * num_tiles, -1, hidden_states.shape[-1]) 
 
-    hidden_states = hidden_states.contiguous()
+
+
+
+    # last_encoder = encoder_hidden_states[-1,:,:]
+    # encoder_hidden_states = last_encoder.unsqueeze(0).repeat(B*num_tiles, 1, 1)
+    # last_text = hidden_states[-1,:,:]
+    # hidden_states = last_text.unsqueeze(0).repeat(B*num_tiles, 1, 1)
+    # rope_1, rope_2 = image_rotary_emb
+    # rope_1 = rope_1[-1].unsqueeze(0).repeat(B*num_tiles, 1, 1)
+    # rope_2 = rope_2[-1].unsqueeze(0).repeat(B*num_tiles, 1, 1)
+    # image_rotary_emb = (rope_1, rope_2)
+    #########################################################################################################
+
 
     for index_block, block in enumerate(self.transformer_blocks):
         encoder_hidden_states, hidden_states = block(
@@ -191,7 +230,7 @@ def customized_forward(
 
     hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
-    encoder_hidden_states = encoder_hidden_states.reshape(B, -1, C)
+    encoder_hidden_states = encoder_hidden_states.view(B, -1, C)
 
     for index_block, block in enumerate(self.single_transformer_blocks):
         hidden_states = block(
@@ -201,19 +240,24 @@ def customized_forward(
             joint_attention_kwargs=joint_attention_kwargs,
         )
 
+
+
+    hidden_states = hidden_states[:, 512//4:, :]
+        
     hidden_states = hidden_states.reshape(B, -1, C)
 
     #########################################################################################################
-    image_hidden_states = hidden_states[:, 512:, :]
-    text_hidden_states = hidden_states[:, :512, :]
-    image_hidden_states = untile(image_hidden_states, num_tiles)
-    hidden_states = torch.cat([text_hidden_states, image_hidden_states], dim=1) 
+    # image_hidden_states = hidden_states[:, 512:, :]
+    # text_hidden_states = hidden_states[:, :512, :]
+    # image_hidden_states = untile(image_hidden_states, num_tiles)
+    # hidden_states = torch.cat([text_hidden_states, image_hidden_states], dim=1) 
     #########################################################################################################
 
-    hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :, ...]
+    # hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :, ...]
 
     hidden_states = self.norm_out(hidden_states, temb)
     output = self.proj_out(hidden_states)
+    output = untile(output, num_tiles)
 
     if USE_PEFT_BACKEND:
         # remove `lora_scale` from each PEFT layer

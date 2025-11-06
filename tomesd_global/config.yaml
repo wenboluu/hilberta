@@ -1,8 +1,8 @@
 # config.yaml
 ratio_list: [0]
 num_tiles: 4
-prompt_list: ["sheep"]
-seed_list: [864]
+prompt_list: ["fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish, fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish,fish"]
+seed_list: [991]
 toma_variant: "local_stripe"
 num_of_inference_steps: 35
 remark: "New_RoPE"
