@@ -187,11 +187,13 @@ def customized_forward(
     tiled_image_emb_2 = tile(image_emb_2.unsqueeze(0), num_tiles).squeeze(0)
 
     # Concatenate text and tiled image embeddings, then reshape to (num_tiles, seq_len, dim)
-    text_emb_1 = text_emb_1.view(num_tiles, -1, text_emb_1.shape[-1])
+    # text_emb_1 = text_emb_1.view(num_tiles, -1, text_emb_1.shape[-1])
+    text_emb_1 = text_emb_1.repeat(num_tiles, 1, 1)
     tiled_image_emb_1 = tiled_image_emb_1.view(num_tiles, -1, tiled_image_emb_1.shape[-1])
     image_rotary_emb_1 = torch.cat([text_emb_1, tiled_image_emb_1], dim=1)
 
-    text_emb_2 = text_emb_2.view(num_tiles, -1, text_emb_2.shape[-1])
+    # text_emb_2 = text_emb_2.view(num_tiles, -1, text_emb_2.shape[-1])
+    text_emb_2 = text_emb_2.repeat(num_tiles, 1, 1)
     tiled_image_emb_2 = tiled_image_emb_2.view(num_tiles, -1, tiled_image_emb_2.shape[-1])
     image_rotary_emb_2 = torch.cat([text_emb_2, tiled_image_emb_2], dim=1)
 
@@ -201,8 +203,10 @@ def customized_forward(
 
     B, N, C = hidden_states.shape
 
-    encoder_hidden_states = encoder_hidden_states.view(B*num_tiles, -1, encoder_hidden_states.shape[-1])
-    encoder_hidden_states = encoder_hidden_states[0].unsqueeze(0).repeat(B*num_tiles, 1, 1)
+    # encoder_hidden_states = encoder_hidden_states.view(B*num_tiles, -1, encoder_hidden_states.shape[-1])
+    # encoder_hidden_states = encoder_hidden_states[0].unsqueeze(0).repeat(B*num_tiles, 1, 1)
+    encoder_hidden_states = encoder_hidden_states.repeat(num_tiles, 1, 1)
+
     hidden_states = hidden_states.view(B * num_tiles, -1, hidden_states.shape[-1]) 
 
 
@@ -227,10 +231,11 @@ def customized_forward(
             image_rotary_emb=image_rotary_emb,
             joint_attention_kwargs=joint_attention_kwargs,
         )
+    # encoder_hidden_states = encoder_hidden_states.sum(dim=0) / encoder_hidden_states.shape[0]
+    # encoder_hidden_states = encoder_hidden_states.unsqueeze(0).repeat(B*num_tiles, 1, 1)
+    ##########################################################################################
 
     hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
-
-    encoder_hidden_states = encoder_hidden_states.view(B, -1, C)
 
     for index_block, block in enumerate(self.single_transformer_blocks):
         hidden_states = block(
@@ -242,7 +247,7 @@ def customized_forward(
 
 
 
-    hidden_states = hidden_states[:, 512//4:, :]
+    hidden_states = hidden_states[:, encoder_hidden_states.shape[1]:, :]
         
     hidden_states = hidden_states.reshape(B, -1, C)
 

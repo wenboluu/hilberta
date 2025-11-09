@@ -34,6 +34,9 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
                 **joint_attention_kwargs,
             )
 
+            encoder_hidden_states = encoder_hidden_states.sum(dim=0) / encoder_hidden_states.shape[0]
+            encoder_hidden_states = encoder_hidden_states.unsqueeze(0).repeat(4, 1, 1)
+
             attn_output = gate_msa.unsqueeze(1) * attn_output
             hidden_states = hidden_states + attn_output
 
