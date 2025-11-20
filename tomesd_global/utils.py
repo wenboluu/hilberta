@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import os
 from typing import Union, Tuple
+from hilbertcurve.hilbertcurve import HilbertCurve
 import gc
 
 def isinstance_str(x: object, cls_name: str):
@@ -247,3 +248,38 @@ def index_shift_for_tile_sliding(x, tile_len, flag = None):
     # import pdb
     # pdb.set_trace()
     return x_slide.reshape(B, N, C)
+
+
+def get_hilbert_flat_indices(p: int) -> torch.Tensor:
+    """
+    Generate a 1D torch.Tensor of flattened indices for a 2^p x 2^p matrix,
+    ordered by Hilbert curve traversal (with origin at bottom-left).
+
+    Args:
+        p (int): Hilbert curve order (matrix size is 2^p x 2^p)
+
+    Returns:
+        torch.Tensor: Flattened index tensor of shape (2^p * 2^p,)
+    """
+    n = 2
+    size = 2 ** p
+    hilbert_curve = HilbertCurve(p, n)
+
+    indices = []
+    for d in range(size * size):
+        x, y = hilbert_curve.point_from_distance(d)
+        row = size - 1 - y  # flip vertically for bottom-left origin
+        flat_index = row * size + x  # row-major flattening
+        indices.append(flat_index)
+
+    return torch.tensor(indices, dtype=torch.long)
+
+
+def get_inverse_hilbert_indices(p: int) -> torch.Tensor:
+    hilbert = get_hilbert_flat_indices(p)
+    inverse = torch.empty_like(hilbert)
+    inverse[hilbert] = torch.arange(hilbert.numel(), device=hilbert.device)
+    return inverse
+
+
+

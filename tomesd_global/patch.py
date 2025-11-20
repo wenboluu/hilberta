@@ -1,9 +1,5 @@
 import torch
-import math
-import os 
 from typing import Type, Dict, Any, Tuple, Callable, Optional, Union, List
-import json 
-from merge import do_nothing
 from utils import isinstance_str, init_generator
 from customized_attention_processor import FluxAttnProcessor2_0_for_transformerblock_global
 
@@ -20,7 +16,7 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
             joint_attention_kwargs=None,
         ):
             norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
-
+            num_of_tiles = norm_hidden_states.shape[0]
             norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
                 encoder_hidden_states, emb=temb
             )
@@ -34,8 +30,9 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
                 **joint_attention_kwargs,
             )
 
+            # COPY THE ENCODER HIDDEN STATES
             encoder_hidden_states = encoder_hidden_states.sum(dim=0) / encoder_hidden_states.shape[0]
-            encoder_hidden_states = encoder_hidden_states.unsqueeze(0).repeat(4, 1, 1)
+            encoder_hidden_states = encoder_hidden_states.unsqueeze(0).repeat(num_of_tiles, 1, 1)
 
             attn_output = gate_msa.unsqueeze(1) * attn_output
             hidden_states = hidden_states + attn_output

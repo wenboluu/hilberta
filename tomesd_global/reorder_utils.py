@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 from diffusers.utils import USE_PEFT_BACKEND, is_torch_version, logging, scale_lora_layers, unscale_lora_layers
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
-
+from utils import get_hilbert_flat_indices, get_inverse_hilbert_indices
 logger = logging.get_logger(__name__) 
 
 
@@ -30,32 +30,6 @@ def tile(x, num_tiles):
     x_reshaped = x_reshaped.reshape(B, HW, C).contiguous()
 
     return x_reshaped 
-
-def tile_compare(x, r, num_tiles):
-    B, HW, C = x.shape
-    H = W = int(HW**0.5)
-
-    num_tiles_per_side = int(num_tiles**0.5)
-    tile_side_len = H // num_tiles_per_side
-
-    indices = torch.arange(HW, device=x.device).reshape(1, H, W, 1)
-    patch_indices = torch.as_strided(
-        indices,
-        (1, num_tiles_per_side, num_tiles_per_side, tile_side_len, tile_side_len, 1),
-        (HW * 1, tile_side_len * W * 1, tile_side_len * 1, W * 1, 1, 1),
-    )
-
-    x_reshaped = torch.as_strided(
-        x,
-        (1, num_tiles_per_side, num_tiles_per_side, tile_side_len, tile_side_len, C),
-        (HW * C, tile_side_len * H * C, tile_side_len * C, H * C, C, 1),
-    )
-    x_reshaped = x_reshaped.reshape(-1, tile_side_len**2, C)
-    x_reshaped = x_reshaped.reshape(B, HW, C)
-
-
-    return x_reshaped, patch_indices.reshape(-1, HW)
-
 
 def untile(x_tiled, num_tiles):
     """
@@ -78,6 +52,66 @@ def untile(x_tiled, num_tiles):
 
     return x_tiles.view(B, H * W, C)
 
+def hilbert_tile(x, offset=0):
+    hilbert_index = get_hilbert_flat_indices(6).to(x.device)
+    hilbert_index_offset = torch.cat([hilbert_index[offset:], hilbert_index[:offset]])
+    return torch.gather(x, 1, hilbert_index_offset.unsqueeze(0).unsqueeze(-1).repeat(x.shape[0], 1, x.shape[-1]))
+
+def hilbert_untile(x_hilbert, offset=0):
+    inverse_index = get_inverse_hilbert_indices(6).to(x_hilbert.device)
+    if offset > 0:
+        x_hilbert = torch.cat([x_hilbert[:, -offset:], x_hilbert[:, :-offset]], dim=1)
+
+    return torch.gather(x_hilbert, 1, inverse_index.unsqueeze(0).unsqueeze(-1).repeat(x_hilbert.shape[0], 1, x_hilbert.shape[-1]))
+
+
+def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, offset = 0):
+    """
+    Reorders the image part of rotary embeddings and hidden states using Hilbert curve,
+    tiles them for each image patch, and prepares them for model input.
+
+    Args:
+        image_rotary_emb (tuple of torch.Tensor): Tuple of (rotary_emb_1, rotary_emb_2),
+            each of shape [512 + H*W, dim], where 512 is text embedding and the rest is image.
+        hidden_states (torch.Tensor): Input hidden states of shape [B, N, C], where N = H * W.
+        encoder_hidden_states (torch.Tensor): Encoder context, shape [1, seq_len, C] or [B, seq_len, C].
+        num_tiles (int): Number of spatial tiles to split image into (e.g., 16 for 4x4).
+
+    Returns:
+        image_rotary_emb: Tuple of reordered and tiled rotary embeddings
+        hidden_states: Reordered and reshaped hidden states [B * num_tiles, tile_len, C]
+        encoder_hidden_states: Tiled encoder hidden states [B * num_tiles, ..., C]
+    """
+    image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
+
+    # Split rotary embeddings into text and image parts
+    text_emb_1, image_emb_1 = image_rotary_emb_1[:512], image_rotary_emb_1[512:]
+    text_emb_2, image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
+
+    # Tile and reorder image embeddings with Hilbert curve
+    tiled_image_emb_1 = hilbert_tile(image_emb_1.unsqueeze(0), offset).squeeze(0)
+    tiled_image_emb_2 = hilbert_tile(image_emb_2.unsqueeze(0), offset).squeeze(0)
+
+    # Repeat text embedding for each tile
+    text_emb_1 = text_emb_1.repeat(num_tiles, 1, 1)
+    tiled_image_emb_1 = tiled_image_emb_1.view(num_tiles, -1, tiled_image_emb_1.shape[-1])
+    image_rotary_emb_1 = torch.cat([text_emb_1, tiled_image_emb_1], dim=1)
+
+    text_emb_2 = text_emb_2.repeat(num_tiles, 1, 1)
+    tiled_image_emb_2 = tiled_image_emb_2.view(num_tiles, -1, tiled_image_emb_2.shape[-1])
+    image_rotary_emb_2 = torch.cat([text_emb_2, tiled_image_emb_2], dim=1)
+
+    image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
+
+    # Reorder hidden states
+    hidden_states = hilbert_tile(hidden_states, offset)
+    B, N, C = hidden_states.shape
+    hidden_states = hidden_states.view(B * num_tiles, -1, C)
+
+    # Tile encoder hidden states
+    encoder_hidden_states = encoder_hidden_states.repeat(num_tiles, 1, 1)
+
+    return image_rotary_emb, hidden_states, encoder_hidden_states
 
 def customized_forward(
     self,
@@ -94,33 +128,6 @@ def customized_forward(
     return_dict: bool = True,
     controlnet_blocks_repeat: bool = False,
 ) -> Union[torch.FloatTensor, Transformer2DModelOutput]:
-    """
-    The [`FluxTransformer2DModel`] forward method.
-
-    Args:
-        hidden_states (`torch.FloatTensor` of shape `(batch size, channel, height, width)`):
-            Input `hidden_states`.
-        encoder_hidden_states (`torch.FloatTensor` of shape `(batch size, sequence_len, embed_dims)`):
-            Conditional embeddings (embeddings computed from the input conditions such as prompts) to use.
-        pooled_projections (`torch.FloatTensor` of shape `(batch_size, projection_dim)`): Embeddings projected
-            from the embeddings of input conditions.
-        timestep ( `torch.LongTensor`):
-            Used to indicate denoising step.
-        block_controlnet_hidden_states: (`list` of `torch.Tensor`):
-            A list of tensors that if specified are added to the residuals of transformer blocks.
-        joint_attention_kwargs (`dict`, *optional*):
-            A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
-            `self.processor` in
-            [diffusers.models.attention_processor](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention_processor.py).
-        return_dict (`bool`, *optional*, defaults to `True`):
-            Whether or not to return a [`~models.transformer_2d.Transformer2DModelOutput`] instead of a plain
-            tuple.
-
-    Returns:
-        If `return_dict` is True, an [`~models.transformer_2d.Transformer2DModelOutput`] is returned, otherwise a
-        `tuple` where the first element is the sample tensor.
-    """
-
     def load_config(config_path):
         """Load configuration from YAML file"""
         with open(config_path, 'r') as f:
@@ -174,54 +181,12 @@ def customized_forward(
 
     ids = torch.cat((txt_ids, img_ids), dim=0)
     image_rotary_emb = self.pos_embed(ids)
-
-    #########################################################################################################
-    # Split rotary embeddings into text and image parts
-    image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
-
-    text_emb_1, image_emb_1 = image_rotary_emb_1[:512], image_rotary_emb_1[512:]
-    text_emb_2, image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
-
-    # Tile the image embeddings across the number of tiles
-    tiled_image_emb_1 = tile(image_emb_1.unsqueeze(0), num_tiles).squeeze(0)
-    tiled_image_emb_2 = tile(image_emb_2.unsqueeze(0), num_tiles).squeeze(0)
-
-    # Concatenate text and tiled image embeddings, then reshape to (num_tiles, seq_len, dim)
-    # text_emb_1 = text_emb_1.view(num_tiles, -1, text_emb_1.shape[-1])
-    text_emb_1 = text_emb_1.repeat(num_tiles, 1, 1)
-    tiled_image_emb_1 = tiled_image_emb_1.view(num_tiles, -1, tiled_image_emb_1.shape[-1])
-    image_rotary_emb_1 = torch.cat([text_emb_1, tiled_image_emb_1], dim=1)
-
-    # text_emb_2 = text_emb_2.view(num_tiles, -1, text_emb_2.shape[-1])
-    text_emb_2 = text_emb_2.repeat(num_tiles, 1, 1)
-    tiled_image_emb_2 = tiled_image_emb_2.view(num_tiles, -1, tiled_image_emb_2.shape[-1])
-    image_rotary_emb_2 = torch.cat([text_emb_2, tiled_image_emb_2], dim=1)
-
-    # Pack the updated embeddings and tile the hidden states accordingly
-    image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
-    hidden_states = tile(hidden_states, num_tiles)
-
     B, N, C = hidden_states.shape
-
-    # encoder_hidden_states = encoder_hidden_states.view(B*num_tiles, -1, encoder_hidden_states.shape[-1])
-    # encoder_hidden_states = encoder_hidden_states[0].unsqueeze(0).repeat(B*num_tiles, 1, 1)
-    encoder_hidden_states = encoder_hidden_states.repeat(num_tiles, 1, 1)
-
-    hidden_states = hidden_states.view(B * num_tiles, -1, hidden_states.shape[-1]) 
-
-
-
-
-    # last_encoder = encoder_hidden_states[-1,:,:]
-    # encoder_hidden_states = last_encoder.unsqueeze(0).repeat(B*num_tiles, 1, 1)
-    # last_text = hidden_states[-1,:,:]
-    # hidden_states = last_text.unsqueeze(0).repeat(B*num_tiles, 1, 1)
-    # rope_1, rope_2 = image_rotary_emb
-    # rope_1 = rope_1[-1].unsqueeze(0).repeat(B*num_tiles, 1, 1)
-    # rope_2 = rope_2[-1].unsqueeze(0).repeat(B*num_tiles, 1, 1)
-    # image_rotary_emb = (rope_1, rope_2)
     #########################################################################################################
-
+    image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
+        image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, offset = 1
+    )
+    #########################################################################################################
 
     for index_block, block in enumerate(self.transformer_blocks):
         encoder_hidden_states, hidden_states = block(
@@ -231,9 +196,6 @@ def customized_forward(
             image_rotary_emb=image_rotary_emb,
             joint_attention_kwargs=joint_attention_kwargs,
         )
-    # encoder_hidden_states = encoder_hidden_states.sum(dim=0) / encoder_hidden_states.shape[0]
-    # encoder_hidden_states = encoder_hidden_states.unsqueeze(0).repeat(B*num_tiles, 1, 1)
-    ##########################################################################################
 
     hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
@@ -245,24 +207,13 @@ def customized_forward(
             joint_attention_kwargs=joint_attention_kwargs,
         )
 
-
-
     hidden_states = hidden_states[:, encoder_hidden_states.shape[1]:, :]
-        
     hidden_states = hidden_states.reshape(B, -1, C)
-
-    #########################################################################################################
-    # image_hidden_states = hidden_states[:, 512:, :]
-    # text_hidden_states = hidden_states[:, :512, :]
-    # image_hidden_states = untile(image_hidden_states, num_tiles)
-    # hidden_states = torch.cat([text_hidden_states, image_hidden_states], dim=1) 
-    #########################################################################################################
-
-    # hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :, ...]
+    
 
     hidden_states = self.norm_out(hidden_states, temb)
     output = self.proj_out(hidden_states)
-    output = untile(output, num_tiles)
+    output = hilbert_untile(output, offset = 1)
 
     if USE_PEFT_BACKEND:
         # remove `lora_scale` from each PEFT layer

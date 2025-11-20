@@ -16,7 +16,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from merge import do_nothing, bipartite_soft_matching_random2d_general
 from utils import isinstance_str, init_generator, apply_rotary_emb
 
 
