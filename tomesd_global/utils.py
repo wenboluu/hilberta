@@ -67,10 +67,12 @@ def apply_rotary_emb(
     """
     if use_real:
         cos, sin = freqs_cis  # [S, D]
-        cos = cos.unsqueeze(1)
-        sin = sin.unsqueeze(1)
-        # cos = cos.unsqueeze(0).unsqueeze(0)
-        # sin = sin.unsqueeze(0).unsqueeze(0)
+        if cos.ndim == 3:
+            cos = cos.unsqueeze(1)
+            sin = sin.unsqueeze(1)
+        elif cos.ndim == 2:
+            cos = cos.unsqueeze(0).unsqueeze(0)
+            sin = sin.unsqueeze(0).unsqueeze(0)
         cos, sin = cos.to(x.device), sin.to(x.device)
 
         if use_real_unbind_dim == -1:

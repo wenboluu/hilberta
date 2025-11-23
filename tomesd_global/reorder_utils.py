@@ -52,24 +52,29 @@ def untile(x_tiled, num_tiles):
 
     return x_tiles.view(B, H * W, C)
 
-def hilbert_tile(x, offset=0):
+def hilbert_tile(x, reverse, offset=0):
+    if reverse:
+        x = x.flip(1)
     hilbert_index = get_hilbert_flat_indices(6).to(x.device)
     hilbert_index_offset = torch.cat([hilbert_index[offset:], hilbert_index[:offset]])
     return torch.gather(x, 1, hilbert_index_offset.unsqueeze(0).unsqueeze(-1).repeat(x.shape[0], 1, x.shape[-1]))
 
-def hilbert_untile(x_hilbert, offset=0):
+def hilbert_untile(x_hilbert, reverse, offset=0):
+    # if reverse:
+    #     x_hilbert = x_hilbert.flip(1)
     inverse_index = get_inverse_hilbert_indices(6).to(x_hilbert.device)
+    if reverse:
+        inverse_index = inverse_index.flip(0)
     if offset > 0:
         x_hilbert = torch.cat([x_hilbert[:, -offset:], x_hilbert[:, :-offset]], dim=1)
 
     return torch.gather(x_hilbert, 1, inverse_index.unsqueeze(0).unsqueeze(-1).repeat(x_hilbert.shape[0], 1, x_hilbert.shape[-1]))
 
-
-def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, offset = 0):
+def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = False, offset = 0):
     """
     Reorders the image part of rotary embeddings and hidden states using Hilbert curve,
     tiles them for each image patch, and prepares them for model input.
-
+ 
     Args:
         image_rotary_emb (tuple of torch.Tensor): Tuple of (rotary_emb_1, rotary_emb_2),
             each of shape [512 + H*W, dim], where 512 is text embedding and the rest is image.
@@ -89,8 +94,8 @@ def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states
     text_emb_2, image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
 
     # Tile and reorder image embeddings with Hilbert curve
-    tiled_image_emb_1 = hilbert_tile(image_emb_1.unsqueeze(0), offset).squeeze(0)
-    tiled_image_emb_2 = hilbert_tile(image_emb_2.unsqueeze(0), offset).squeeze(0)
+    tiled_image_emb_1 = hilbert_tile(image_emb_1.unsqueeze(0), reverse, offset).squeeze(0)
+    tiled_image_emb_2 = hilbert_tile(image_emb_2.unsqueeze(0), reverse, offset).squeeze(0)
 
     # Repeat text embedding for each tile
     text_emb_1 = text_emb_1.repeat(num_tiles, 1, 1)
@@ -104,7 +109,7 @@ def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states
     image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
 
     # Reorder hidden states
-    hidden_states = hilbert_tile(hidden_states, offset)
+    hidden_states = hilbert_tile(hidden_states, reverse, offset)
     B, N, C = hidden_states.shape
     hidden_states = hidden_states.view(B * num_tiles, -1, C)
 
@@ -116,7 +121,7 @@ def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states
 
     return image_rotary_emb, hidden_states, encoder_hidden_states
 
-def recover_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, offset=0):
+def recover_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = False, offset=0):
     """
     Recovers original ordering from Hilbert-tiled embeddings and hidden states.
 
@@ -145,8 +150,8 @@ def recover_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_stat
     flat_image_emb_2 = tiled_image_emb_2.reshape(-1, tiled_image_emb_2.shape[-1])
 
     # Undo Hilbert ordering
-    recovered_image_emb_1 = hilbert_untile(flat_image_emb_1.unsqueeze(0), offset).squeeze(0)
-    recovered_image_emb_2 = hilbert_untile(flat_image_emb_2.unsqueeze(0), offset).squeeze(0)
+    recovered_image_emb_1 = hilbert_untile(flat_image_emb_1.unsqueeze(0), reverse, offset).squeeze(0)
+    recovered_image_emb_2 = hilbert_untile(flat_image_emb_2.unsqueeze(0), reverse, offset).squeeze(0)
 
     # Merge text + image
     text_emb_1 = text_emb_1[0]  # All tiles share same text
@@ -158,7 +163,7 @@ def recover_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_stat
     # === Restore hidden states ===
     B = hidden_states.shape[0] // num_tiles
     flat_hidden = hidden_states.reshape(B, -1, hidden_states.shape[-1])
-    hidden_states = hilbert_untile(flat_hidden, offset)
+    hidden_states = hilbert_untile(flat_hidden, reverse, offset)
 
     # === Restore encoder_hidden_states ===
     # encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True)
@@ -241,12 +246,15 @@ def customized_forward(
     counter = 0
     off_set_counter = 0 
     for index_block, block in enumerate(self.transformer_blocks):
-        off_set_counter = ((counter)%2) * 512
-        print(off_set_counter)
-        
-        # hilbert tile before each block
+        # off_set_counter = ((counter)%4) * 64
+        off_set_counter = ((counter//2)%2) * 128
+
+        # Reverse every one step
+        reverse = counter % 2 == 0
+
+        # hilbert tile before each block        
         image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
-            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, offset = off_set_counter
+            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
         )
         # Entering the block
         encoder_hidden_states, hidden_states = block(
@@ -258,17 +266,20 @@ def customized_forward(
         )
         # hilbert untile after each block
         image_rotary_emb, hidden_states, encoder_hidden_states = recover_hilbert_reorder(
-            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, offset = off_set_counter
+            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse=reverse, offset = off_set_counter
         )
         counter += 1
 
     for index_block, block in enumerate(self.single_transformer_blocks):
-        off_set_counter = ((counter)%2) * 512
-        print(off_set_counter)
+        # off_set_counter = ((counter)%4) * 64
+        off_set_counter = ((counter//2)%2) * 128
+
+        # Reverse every one step
+        reverse = counter % 2 == 0
 
         # hilbert tile before each block
         image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
-            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, offset = off_set_counter
+            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
         )
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
         # Entering the block
@@ -281,7 +292,7 @@ def customized_forward(
         # hilbert untile after each block
         encoder_hidden_states, hidden_states = hidden_states[:, :encoder_hidden_states.shape[1], :], hidden_states[:, encoder_hidden_states.shape[1]:, :]
         image_rotary_emb, hidden_states, encoder_hidden_states = recover_hilbert_reorder(
-            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, offset = off_set_counter
+            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
         )
         counter += 1
 
