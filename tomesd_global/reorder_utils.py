@@ -140,7 +140,6 @@ def recover_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_stat
     """
     image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
 
-    # === Restore rotary embeddings ===
     # Split text + image parts
     text_emb_1, tiled_image_emb_1 = image_rotary_emb_1[:, :512], image_rotary_emb_1[:, 512:]
     text_emb_2, tiled_image_emb_2 = image_rotary_emb_2[:, :512], image_rotary_emb_2[:, 512:]
@@ -160,12 +159,10 @@ def recover_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_stat
     image_rotary_emb_2 = torch.cat([text_emb_2, recovered_image_emb_2], dim=0)
     image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
 
-    # === Restore hidden states ===
     B = hidden_states.shape[0] // num_tiles
     flat_hidden = hidden_states.reshape(B, -1, hidden_states.shape[-1])
     hidden_states = hilbert_untile(flat_hidden, reverse, offset)
 
-    # === Restore encoder_hidden_states ===
     # encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True)
 
     return image_rotary_emb, hidden_states, encoder_hidden_states
@@ -213,6 +210,7 @@ def customized_forward(
     hidden_states = self.x_embedder(hidden_states)
 
     timestep = timestep.to(hidden_states.dtype) * 1000
+    import pdb; pdb.set_trace()
     if guidance is not None:
         guidance = guidance.to(hidden_states.dtype) * 1000
     else:
@@ -245,17 +243,23 @@ def customized_forward(
 
     counter = 0
     off_set_counter = 0 
+    cycle = 2
+    off_set_unit = (N//num_tiles)//cycle
     for index_block, block in enumerate(self.transformer_blocks):
-        # off_set_counter = ((counter)%4) * 64
-        off_set_counter = ((counter//2)%2) * 128
+        off_set_counter = ((counter//2)%cycle) * off_set_unit
 
         # Reverse every one step
         reverse = counter % 2 == 0
+        tile_flag =  counter not in [i for i in range(0, 19, 2*cycle + 1)]
+        if tile_flag:
+            # hilbert tile before each block        
+            image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
+                image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
+            )
+        else:
+            encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True)
+            # encoder_hidden_states = encoder_hidden_states[0].unsqueeze(0)
 
-        # hilbert tile before each block        
-        image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
-            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
-        )
         # Entering the block
         encoder_hidden_states, hidden_states = block(
             hidden_states=hidden_states,
@@ -264,24 +268,31 @@ def customized_forward(
             image_rotary_emb=image_rotary_emb,
             joint_attention_kwargs=joint_attention_kwargs,
         )
-        # hilbert untile after each block
-        image_rotary_emb, hidden_states, encoder_hidden_states = recover_hilbert_reorder(
-            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse=reverse, offset = off_set_counter
-        )
+
+        if tile_flag:
+            # hilbert untile after each block
+            image_rotary_emb, hidden_states, encoder_hidden_states = recover_hilbert_reorder(
+                image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse=reverse, offset = off_set_counter
+            )
         counter += 1
 
     for index_block, block in enumerate(self.single_transformer_blocks):
-        # off_set_counter = ((counter)%4) * 64
-        off_set_counter = ((counter//2)%2) * 128
+        off_set_counter = ((counter//2)%cycle) * off_set_unit
 
         # Reverse every one step
         reverse = counter % 2 == 0
+        tile_flag =  counter not in [i for i in range(0, 38, 2*cycle + 1)]
+        if tile_flag:
+            # hilbert tile before each block
+            image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
+                image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
+            )
+        else:
+            encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True)
+            # encoder_hidden_states = encoder_hidden_states[0].unsqueeze(0)
 
-        # hilbert tile before each block
-        image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
-            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
-        )
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
+
         # Entering the block
         hidden_states = block(
             hidden_states=hidden_states,
@@ -289,11 +300,14 @@ def customized_forward(
             image_rotary_emb=image_rotary_emb,
             joint_attention_kwargs=joint_attention_kwargs,
         )
-        # hilbert untile after each block
+
         encoder_hidden_states, hidden_states = hidden_states[:, :encoder_hidden_states.shape[1], :], hidden_states[:, encoder_hidden_states.shape[1]:, :]
-        image_rotary_emb, hidden_states, encoder_hidden_states = recover_hilbert_reorder(
-            image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
-        )
+
+        if tile_flag:
+            # hilbert untile after each block
+            image_rotary_emb, hidden_states, encoder_hidden_states = recover_hilbert_reorder(
+                image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
+            )
         counter += 1
 
 
