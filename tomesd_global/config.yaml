@@ -1,9 +1,9 @@
 # config.yaml
 ratio_list: [0]
-num_tiles: 16
-prompt_list: ["sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep, sheep,sheep,sheep,sheep,sheep,sheep,sheep,sheep"]
+num_tiles: 64
+prompt_list: ['draw part of a sheep, cartoon, smooth']
 seed_list: [991]
 toma_variant: "local_stripe"
-num_of_inference_steps: 20
+num_of_inference_steps: 50
 remark: "New_RoPE"
 merge_step_interval: 3

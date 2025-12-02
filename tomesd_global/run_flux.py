@@ -222,7 +222,7 @@ if __name__ == "__main__":
         dst_method = dst_method
         output_folder = f"/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/output/{toma_variant}/{ratio}"
         results_file_path = f"time.md"
-        device = "cuda:2"
+        device = "cuda:5"
 
         pipeline = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev",

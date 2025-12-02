@@ -182,13 +182,14 @@ def customized_forward(
     controlnet_single_block_samples=None,
     return_dict: bool = True,
     controlnet_blocks_repeat: bool = False,
+    t: int = 0,
 ) -> Union[torch.FloatTensor, Transformer2DModelOutput]:
     def load_config(config_path):
         """Load configuration from YAML file"""
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         return config
-    
+
     config = load_config("/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml")
 
     num_tiles = config['num_tiles'] if 'num_tiles' in config else 16
@@ -210,7 +211,7 @@ def customized_forward(
     hidden_states = self.x_embedder(hidden_states)
 
     timestep = timestep.to(hidden_states.dtype) * 1000
-    import pdb; pdb.set_trace()
+
     if guidance is not None:
         guidance = guidance.to(hidden_states.dtype) * 1000
     else:
@@ -251,6 +252,8 @@ def customized_forward(
         # Reverse every one step
         reverse = counter % 2 == 0
         tile_flag =  counter not in [i for i in range(0, 19, 2*cycle + 1)]
+        # tile_flag = tile_flag and t >=10
+        tile_flag = t>=0
         if tile_flag:
             # hilbert tile before each block        
             image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
@@ -282,6 +285,8 @@ def customized_forward(
         # Reverse every one step
         reverse = counter % 2 == 0
         tile_flag =  counter not in [i for i in range(0, 38, 2*cycle + 1)]
+        # tile_flag = tile_flag and t >=10
+        tile_flag = t>=0
         if tile_flag:
             # hilbert tile before each block
             image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
