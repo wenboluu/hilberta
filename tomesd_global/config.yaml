@@ -4,6 +4,6 @@ num_tiles: 64
 prompt_list: ['draw part of a sheep, cartoon, smooth']
 seed_list: [991]
 toma_variant: "local_stripe"
-num_of_inference_steps: 50
+num_of_inference_steps: 28
 remark: "New_RoPE"
 merge_step_interval: 3

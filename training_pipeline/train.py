@@ -25,6 +25,9 @@ import warnings
 from contextlib import nullcontext
 from pathlib import Path
 
+import sys
+import types
+
 import numpy as np
 import torch
 import torch.utils.checkpoint
@@ -66,9 +69,6 @@ from diffusers.utils import (
 )
 from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
 from diffusers.utils.torch_utils import is_compiled_module
-
-
-from attention_processor import FluxAttnProcessor2_0, FluxAttnProcessor2_0_student
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
@@ -698,8 +698,6 @@ def collate_fn(examples, with_prior_preservation=False):
     pixel_values = [example["instance_images"] for example in examples]
     prompts = [example["instance_prompt"] for example in examples]
 
-    # Concat class and instance examples for prior preservation.
-    # We do this to avoid doing two forward passes.
     if with_prior_preservation:
         pixel_values += [example["class_images"] for example in examples]
         prompts += [example["class_prompt"] for example in examples]
@@ -727,7 +725,6 @@ class PromptDataset(Dataset):
         example["index"] = index
         return example
 
-
 def tokenize_prompt(tokenizer, prompt, max_sequence_length):
     text_inputs = tokenizer(
         prompt,
@@ -740,7 +737,6 @@ def tokenize_prompt(tokenizer, prompt, max_sequence_length):
     )
     text_input_ids = text_inputs.input_ids
     return text_input_ids
-
 
 def _encode_prompt_with_t5(
     text_encoder,
@@ -968,7 +964,7 @@ def main(args):
                 exist_ok=True,
             ).repo_id
 
-    # Load the tokenizers
+    # # Load the tokenizers
     tokenizer_one = CLIPTokenizer.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="tokenizer",
@@ -1009,31 +1005,11 @@ def main(args):
     )
 
 
-    ########################### Set Att Processor ###########################
-    #[FIXME]
-    attn_processors = {}
-    for idx, name in enumerate(transformer.attn_processors.keys()):
-        if idx % 4 == 2 or idx % 4 == 3:
-            attn_processors[name] = FluxAttnProcessor2_0_student(distill=False, mask=4)
-        else:
-            attn_processors[name] = FluxAttnProcessor2_0_student(distill=False, mask=0)
-
-    attn_processors_teacher = {}
-    for idx, name in enumerate(transformer.attn_processors.keys()):
-        attn_processors_teacher[name] = FluxAttnProcessor2_0(distill=False)
-
-    transformer.set_attn_processor(attn_processors)
-    transformer_teacher.set_attn_processor(attn_processors_teacher)
-
-    ########################### Set Att Processor ###########################
-
-    #[FIXME]
-    if args.start_from_clear:
-        step = 35000
-        state_dict = load_file(f"/scratch/yx2432/MLSYS/diffusion-ft/flux_ft/exp_output/checkpoint-{step}/model.safetensors")
-        transformer.load_state_dict(state_dict)
-        del state_dict
-
+    ########################### Set Customized Forward for the Studnet transformer ###########################
+    sys.path.append(os.path.dirname(__file__))
+    from reorder_utils import *
+    transformer.forward = types.MethodType(customized_forward, transformer)
+    ########################### Set Customized Forward for the Studnet transformer ###########################
 
     # We only train the additional adapter LoRA layers
     transformer.requires_grad_(False)
@@ -1324,7 +1300,6 @@ def main(args):
         num_cycles=args.lr_num_cycles,
         power=args.lr_power,
     )
-
 
     transformer, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         transformer, optimizer, train_dataloader, lr_scheduler

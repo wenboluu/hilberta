@@ -10,14 +10,13 @@
 #SBATCH --requeue
 
 #SBATCH --mail-type=ALL
-#SBATCH --mail-user=yx2432
+#SBATCH --mail-user=sz3684
 
 module purge
 
 TARGET_PATH=$(dirname "$(realpath "$0")")
 
-singularity exec --nv --bind /scratch/$USER \
-	    --overlay /scratch/yx2432/singularity/overlay-15GB-500K.ext3:ro \
-	    /scratch/work/public/singularity/cuda12.1.1-cudnn8.9.0-devel-ubuntu22.04.2.sif \
-	    /bin/bash -c "source /ext3/env.sh; cd $TARGET_PATH; bash train.sh"
-
+# Activate the environment and run the training script
+conda activate /scratch/sz3684/ICML/flux_ICML_rebuttal/penv
+cd $TARGET_PATH
+bash train.sh

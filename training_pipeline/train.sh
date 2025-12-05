@@ -1,15 +1,14 @@
 EXP_NAME=$(basename "$PWD")
 
-export MODEL_PATH="/scratch/yx2432/models/FLUX.1-dev/models--black-forest-labs--FLUX.1-dev/snapshots/0ef5fff789c832c5c7f4e127f94c8b54bbcced44"
-export INSTANCE_DIR="/scratch/yx2432/MLSYS/diffusion-ft/flux_ft/dataset"
+export MODEL_PATH="/scratch/sz3684/.cache/models--black-forest-labs--FLUX.1-dev/snapshots/0ef5fff789c832c5c7f4e127f94c8b54bbcced44"
+export INSTANCE_DIR="/scratch/sz3684/reorder_local_attention/dataset/cache_dataset"
 export OUTPUT_DIR="exp_output"
 
 echo "Running experiment: $EXP_NAME"
 
-
 # This exp checks the smaller local mask 16(height) x 24(width)
 
-accelerate launch train.py \
+accelerate ./training_pipeline/launch train.py \
   --pretrained_model_name_or_path=$MODEL_PATH  \
   --instance_data_dir=$INSTANCE_DIR \
   --output_dir=$OUTPUT_DIR \

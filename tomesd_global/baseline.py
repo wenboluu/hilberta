@@ -43,7 +43,7 @@ def generate_image(
         dst_recompute_timesteps = recompute_step,
         attn_recompute_timesteps = recompute_step,
         merge_step = merge_step,
-        config_path="/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/transformer_layer_config.yaml",
+        config_path="/scratch/sz3684/reorder_local_attention/tomesd_global/transformer_layer_config.yaml",
     )
     #********************************************************************************************************************
 
@@ -153,8 +153,8 @@ if __name__ == "__main__":
     import shutil
     from pathlib import Path
 
-    if os.path.exists('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tensors/'):
-        shutil.rmtree('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tensors/')
+    if os.path.exists('/scratch/sz3684/reorder_local_attention/tensors/'):
+        shutil.rmtree('/scratch/sz3684/reorder_local_attention/tensors/')
 
     def load_config(config_path):
         """Load configuration from YAML file"""
@@ -169,7 +169,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config", 
         type=str,
-        default="/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml",
+        default="/scratch/sz3684/reorder_local_attention/tomesd_global/config.yaml",
         help="Path to configuration YAML file"
     )
     args = parser.parse_args()
@@ -207,14 +207,14 @@ if __name__ == "__main__":
         prompt_list = prompt_list
         seed_list = seed_list
         dst_method = dst_method
-        output_folder = f"/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/output/{toma_variant}/{ratio}"
+        output_folder = f"/scratch/sz3684/reorder_local_attention/output/{toma_variant}/{ratio}"
         results_file_path = f"time.md"
         device = "cuda:0"
 
         pipeline = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev",
             torch_dtype=torch.bfloat16,
-            cache_dir="/home/wl2707/.cache/huggingface/hub",
+            cache_dir="/scratch/sz3684/.cache",
             local_files_only=True,
         ).to(device)
 
