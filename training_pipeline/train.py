@@ -1007,8 +1007,8 @@ def main(args):
 
     ########################### Set Customized Forward for the Studnet transformer ###########################
     sys.path.append(os.path.dirname(__file__))
-    from reorder_utils import *
-    transformer.forward = types.MethodType(customized_forward, transformer)
+    # from reorder_utils import customized_forward
+    # transformer.forward = types.MethodType(customized_forward, transformer)
     ########################### Set Customized Forward for the Studnet transformer ###########################
 
     # We only train the additional adapter LoRA layers

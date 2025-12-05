@@ -8,7 +8,7 @@ echo "Running experiment: $EXP_NAME"
 
 # This exp checks the smaller local mask 16(height) x 24(width)
 
-accelerate ./training_pipeline/launch train.py \
+accelerate launch ./training_pipeline/train.py \
   --pretrained_model_name_or_path=$MODEL_PATH  \
   --instance_data_dir=$INSTANCE_DIR \
   --output_dir=$OUTPUT_DIR \
