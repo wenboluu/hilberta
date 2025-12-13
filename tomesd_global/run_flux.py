@@ -2,7 +2,7 @@ import argparse
 import numpy as np
 import itertools
 import os
-from diffusers import StableDiffusionXLPipeline, StableDiffusionPipeline, FluxPipeline
+from diffusers import FluxPipeline
 import torch
 import pandas as pd
 from tqdm import tqdm
@@ -47,8 +47,9 @@ def generate_image(
     )
     #********************************************************************************************************************
     import types
-    from reorder_utils import customized_forward
+    from masking_utils import customized_forward
     pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
+
 
     apply_patch(
         pipeline,

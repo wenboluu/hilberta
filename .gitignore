@@ -9,3 +9,4 @@ tomesd_global/__pycache__/
 tomesd_global_backup/**/*
 output/**/*
 flux_todo/**/*
+mask/

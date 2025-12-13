@@ -53,8 +53,8 @@ def untile(x_tiled, num_tiles):
     return x_tiles.view(B, H * W, C)
 
 def hilbert_tile(x, reverse, offset=0):
-    if reverse:
-        x = x.flip(1)
+    # if reverse:
+    #     x = x.flip(1)
     hilbert_index = get_hilbert_flat_indices(6).to(x.device)
     hilbert_index_offset = torch.cat([hilbert_index[offset:], hilbert_index[:offset]])
     return torch.gather(x, 1, hilbert_index_offset.unsqueeze(0).unsqueeze(-1).repeat(x.shape[0], 1, x.shape[-1]))
@@ -252,8 +252,6 @@ def customized_forward(
         # Reverse every one step
         reverse = counter % 2 == 0
         tile_flag =  counter not in [i for i in range(0, 19, 2*cycle + 1)]
-        # tile_flag = tile_flag and t >=10
-        tile_flag = t>=0
         if tile_flag:
             # hilbert tile before each block        
             image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
@@ -285,8 +283,6 @@ def customized_forward(
         # Reverse every one step
         reverse = counter % 2 == 0
         tile_flag =  counter not in [i for i in range(0, 38, 2*cycle + 1)]
-        # tile_flag = tile_flag and t >=10
-        tile_flag = t>=0
         if tile_flag:
             # hilbert tile before each block
             image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
@@ -333,6 +329,3 @@ def customized_forward(
         return (output,)
 
     return Transformer2DModelOutput(sample=output)
-
-
-

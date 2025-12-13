@@ -134,28 +134,53 @@ def apply_patch(
             "k":  num_tiles * 4,
             "merge_method": merge_method,
             "unet_scheduler": unet_scheduler,
-            "sliding_method": "stay",
+            "offset": 0,
         },
     }
-    
-    import types
-    from reorder_utils import customized_forward
-    model.transformer.forward = types.MethodType(customized_forward, model.transformer)
+
+    transformer_model._tome_info_1 = {
+        "size": None,
+        "args": {
+            "ratio": ratio,
+            "max_downsample": max_downsample,
+            "sx": sx,
+            "sy": sy,
+            "use_rand": use_rand,
+            "generator": None,
+            "merge_attn": merge_attn,
+            "merge_crossattn": merge_crossattn,
+            "merge_mlp": merge_mlp,
+            "dst_selection": dst_selection,
+            "k":  num_tiles * 4,
+            "merge_method": merge_method,
+            "unet_scheduler": unet_scheduler,
+            "offset": 32,
+        },
+    }
 
     make_tome_block_fn = make_diffusers_flux_tome_block
     make_single_tome_block_fn = make_flux_single_block
 
+    counter = 0 
     for _, module in transformer_model.named_modules():
         if isinstance_str(module, "FluxTransformerBlock"):
             module.__class__ = make_tome_block_fn(module.__class__)
             module._tome_info = transformer_model._tome_info
             module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
-            module.attn.processor._tome_info = module._tome_info
+            if counter % 2 == 0:
+                module.attn.processor._tome_info = transformer_model._tome_info
+            else:
+                module.attn.processor._tome_info = transformer_model._tome_info_1
+            counter += 1
         elif isinstance_str(module, "FluxSingleTransformerBlock"):
             module.__class__ = make_single_tome_block_fn(module.__class__)
             module._tome_info = transformer_model._tome_info
             module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
-            module.attn.processor._tome_info = module._tome_info
+            if counter % 2 == 0:
+                module.attn.processor._tome_info = transformer_model._tome_info
+            else:
+                module.attn.processor._tome_info = transformer_model._tome_info_1
+            counter += 1
     return model
 
 def remove_patch(model: torch.nn.Module):
