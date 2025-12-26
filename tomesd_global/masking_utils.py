@@ -9,11 +9,26 @@ import torch.nn.functional as F
 import os 
 from diffusers.utils import USE_PEFT_BACKEND, is_torch_version, logging, scale_lora_layers, unscale_lora_layers
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
-from utils import get_hilbert_flat_indices, get_inverse_hilbert_indices
+from utils import get_hilbert_flat_indices
 logger = logging.get_logger(__name__) 
 
 def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
     hilbert_index = get_hilbert_flat_indices(6).to(x.device)
+
+    ################################# Make complete hilbert index #################################
+    index = torch.arange(hilbert_index.numel()).to(x.device)    
+    cut_off = index.shape[0] // 4
+
+    hilbert_x = torch.gather(index, dim=0, index=hilbert_index)
+    hilbert_x_half = hilbert_x[cut_off:-cut_off]
+
+    x_flip = index.flip(0)
+    hilbert_x_flip = torch.gather(x_flip, dim=0, index=hilbert_index)
+    hilbert_x_half_flip = hilbert_x_flip[cut_off:-cut_off]
+
+    hilbert_index = torch.cat([hilbert_x_half, hilbert_x_half_flip])
+    ################################# Make complete hilbert index #################################
+
     hilbert_index = torch.cat([hilbert_index[offset:], hilbert_index[:offset]])
     hilbert_index = hilbert_index.reshape(num_of_tiles, -1)
 
@@ -47,6 +62,31 @@ def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
     
     mask = torch.full((seq_len, seq_len), float('-inf'), device=x.device)
     mask[pairs[:, 0], pairs[:, 1]] = 0.0   
+    
+    for i in range(24, 40):
+        start = i*64 + 24
+        end = i*64 + 40 
+        mask[start:end, :] = 0.0
+        mask[:, start:end] = 0.0
+    
+    corner_size = 4
+    seq_len = 4096
+
+    # Top-left corner
+    mask[0:corner_size, :] = 0.0  
+    mask[:, 0:corner_size] = 0.0  
+
+    # Top-right corner
+    mask[0:corner_size, seq_len-corner_size:seq_len] = 0.0
+    mask[:, seq_len-corner_size:seq_len] = 0.0
+
+    # Bottom-left corner
+    mask[seq_len-corner_size:seq_len, 0:corner_size] = 0.0
+    mask[:, 0:corner_size] = 0.0
+
+    # Bottom-right corner
+    mask[seq_len-corner_size:seq_len, seq_len-corner_size:seq_len] = 0.0
+    mask[:, seq_len-corner_size:seq_len] = 0.0
     return mask
 
 def customized_forward(
@@ -112,14 +152,16 @@ def customized_forward(
         with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
             config = yaml.safe_load(f)
         num_of_tiles = config['num_tiles']
-        offset = 32
-        mask = create_hilbert_tile_mask(hidden_states, num_of_tiles=num_of_tiles)
-        mask_offseted = create_hilbert_tile_mask(hidden_states, num_of_tiles=num_of_tiles, offset=32)
+        sliding_cycle = config['sliding_cycle']
+
+        offset_list = [((hidden_states.shape[1]//num_of_tiles) //sliding_cycle) * i for i in range(sliding_cycle)]
+
         os.makedirs('./mask', exist_ok=True)
-        with open(f'./mask/mask_offset_0_num_of_tiles_{num_of_tiles}.pt', 'wb') as f:
-            torch.save(mask, f)
-        with open(f'./mask/mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt', 'wb') as f:
-            torch.save(mask_offseted, f)
+
+        for offset in offset_list:
+            mask = create_hilbert_tile_mask(hidden_states, num_of_tiles=num_of_tiles, offset=offset)
+            with open(f'./mask/mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt', 'wb') as f:
+                torch.save(mask, f)
 
         for index_block, block in enumerate(self.transformer_blocks):
             if self.training and self.gradient_checkpointing:

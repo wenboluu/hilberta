@@ -2,6 +2,7 @@ import torch
 from typing import Type, Dict, Any, Tuple, Callable, Optional, Union, List
 from utils import isinstance_str, init_generator
 from customized_attention_processor import FluxAttnProcessor2_0_for_transformerblock_global
+import yaml
 
 def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
     class ToMeBlock(block_class):
@@ -118,45 +119,34 @@ def apply_patch(
     else:
         print("Model is not a supported model for ToMe patching.")
 
-    transformer_model._tome_info = {
-        "size": None,
-        "args": {
-            "ratio": ratio,
-            "max_downsample": max_downsample,
-            "sx": sx,
-            "sy": sy,
-            "use_rand": use_rand,
-            "generator": None,
-            "merge_attn": merge_attn,
-            "merge_crossattn": merge_crossattn,
-            "merge_mlp": merge_mlp,
-            "dst_selection": dst_selection,
-            "k":  num_tiles * 4,
-            "merge_method": merge_method,
-            "unet_scheduler": unet_scheduler,
-            "offset": 0,
-        },
-    }
+    with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+    num_of_tiles = config['num_tiles']
+    sliding_cycle = config['sliding_cycle']
 
-    transformer_model._tome_info_1 = {
-        "size": None,
-        "args": {
-            "ratio": ratio,
-            "max_downsample": max_downsample,
-            "sx": sx,
-            "sy": sy,
-            "use_rand": use_rand,
-            "generator": None,
-            "merge_attn": merge_attn,
-            "merge_crossattn": merge_crossattn,
-            "merge_mlp": merge_mlp,
-            "dst_selection": dst_selection,
-            "k":  num_tiles * 4,
-            "merge_method": merge_method,
-            "unet_scheduler": unet_scheduler,
-            "offset": 32,
-        },
-    }
+    info_list = []
+    for i in range(sliding_cycle):
+        transformer_model._tome_info = {
+            "size": None,
+            "args": {
+                "ratio": ratio,
+                "max_downsample": max_downsample,
+                "sx": sx,
+                "sy": sy,
+                "use_rand": use_rand,
+                "generator": None,
+                "merge_attn": merge_attn,
+                "merge_crossattn": merge_crossattn,
+                "merge_mlp": merge_mlp,
+                "dst_selection": dst_selection,
+                "k":  num_tiles * 4,
+                "merge_method": merge_method,
+                "unet_scheduler": unet_scheduler,
+                "offset": (4096//num_of_tiles)//sliding_cycle * i,
+            },
+        }
+        info_list.append(transformer_model._tome_info)
+    
 
     make_tome_block_fn = make_diffusers_flux_tome_block
     make_single_tome_block_fn = make_flux_single_block
@@ -165,21 +155,17 @@ def apply_patch(
     for _, module in transformer_model.named_modules():
         if isinstance_str(module, "FluxTransformerBlock"):
             module.__class__ = make_tome_block_fn(module.__class__)
-            module._tome_info = transformer_model._tome_info
             module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
-            if counter % 2 == 0:
-                module.attn.processor._tome_info = transformer_model._tome_info
-            else:
-                module.attn.processor._tome_info = transformer_model._tome_info_1
+            info_counter = counter % sliding_cycle
+            module._tome_info = info_list[info_counter]
+            module.attn.processor._tome_info = info_list[info_counter]
             counter += 1
         elif isinstance_str(module, "FluxSingleTransformerBlock"):
             module.__class__ = make_single_tome_block_fn(module.__class__)
-            module._tome_info = transformer_model._tome_info
             module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
-            if counter % 2 == 0:
-                module.attn.processor._tome_info = transformer_model._tome_info
-            else:
-                module.attn.processor._tome_info = transformer_model._tome_info_1
+            info_counter = counter % sliding_cycle
+            module._tome_info = info_list[info_counter]
+            module.attn.processor._tome_info = info_list[info_counter]
             counter += 1
     return model
 

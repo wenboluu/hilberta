@@ -1,10 +1,10 @@
 # config.yaml
 ratio_list: [0]
-num_tiles: 64
-sliding_cycle: 2
-prompt_list: ['sheep']
-seed_list: [864]
+num_tiles: 16
+sliding_cycle: 4
+prompt_list: ['fish']
+seed_list: [776]
 toma_variant: "local_stripe"
-num_of_inference_steps: 35
+num_of_inference_steps: 28
 remark: "New_RoPE"
 merge_step_interval: 3
