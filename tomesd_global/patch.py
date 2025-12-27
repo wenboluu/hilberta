@@ -15,6 +15,8 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
             temb: torch.FloatTensor,
             image_rotary_emb=None,
             joint_attention_kwargs=None,
+            layer_idx = None,
+            step: Optional[int] = None,
         ):
             norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
             num_of_tiles = norm_hidden_states.shape[0]
@@ -28,6 +30,8 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
                 hidden_states=norm_hidden_states,
                 encoder_hidden_states=norm_encoder_hidden_states,
                 image_rotary_emb=image_rotary_emb,
+                layer_idx = layer_idx,
+                step = step,
                 **joint_attention_kwargs,
             )
 
@@ -71,6 +75,8 @@ def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.
             temb: torch.FloatTensor,
             image_rotary_emb=None,
             joint_attention_kwargs=None,
+            layer_idx = None,
+            step: Optional[int] = None,
         ):
             residual = hidden_states
             norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
@@ -79,6 +85,8 @@ def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.
             attn_output = self.attn(
                 hidden_states=norm_hidden_states,
                 image_rotary_emb=image_rotary_emb,
+                layer_idx = layer_idx,
+                step = step,
                 **joint_attention_kwargs,
             )
 

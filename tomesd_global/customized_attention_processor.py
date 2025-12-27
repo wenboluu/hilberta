@@ -782,6 +782,8 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
         encoder_hidden_states: torch.FloatTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         image_rotary_emb: Optional[torch.Tensor] = None,
+        step = None,
+        layer_idx = None,
     ) -> torch.FloatTensor:
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
         # `sample` projections.
@@ -855,9 +857,13 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
             with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
                 config = yaml.safe_load(f)
             num_of_tiles = config['num_tiles']
+            full_attn_step = config['full_attn_step']
+            full_attn_layer = config['full_attn_layer']
+
             offset = self._tome_info["args"]["offset"]
-            mask = torch.load(f'/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/mask/mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt')
-            attn_weight[:, :, -4096:, -4096:] = attn_weight[:, :, -4096:, -4096:] + mask 
+            if step not in full_attn_step and layer_idx not in full_attn_layer:
+                mask = torch.load(f'/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/mask/mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt')
+                attn_weight[:, :, -4096:, -4096:] = attn_weight[:, :, -4096:, -4096:] + mask 
             attn_weight += attn_bias
             attn_weight = torch.softmax(attn_weight, dim=-1)
             attn_weight = torch.dropout(attn_weight, dropout_p, train=True)

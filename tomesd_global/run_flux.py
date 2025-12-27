@@ -46,10 +46,6 @@ def generate_image(
         config_path="/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/transformer_layer_config.yaml",
     )
     #********************************************************************************************************************
-    import types
-    from masking_utils import customized_forward
-    pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
-
 
     apply_patch(
         pipeline,
@@ -67,7 +63,7 @@ def generate_image(
     end_event = torch.cuda.Event(enable_timing=True)
     start_event.record()
 
-    stable_diffusion_output = pipeline(
+    stable_diffusion_output = pipeline.customized_call(
         prompt=prompt,
         height=height,
         width=width,
@@ -156,7 +152,6 @@ def evaluate_dst_selection(
         peak_memory = torch.cuda.max_memory_allocated()
         print(f"Current memory: {current_memory / 1048576:.2f}MiB, Peak memory: {peak_memory / 1048576:.2f}MiB")
 
-
         results.append(elapsed_time)
 
 if __name__ == "__main__":
@@ -231,6 +226,11 @@ if __name__ == "__main__":
             cache_dir="/home/wl2707/.cache/huggingface/hub",
             local_files_only=True,
         ).to(device)
+
+        import types
+        from masking_utils import customized_forward, customized_call
+        pipeline.customized_call = types.MethodType(customized_call, pipeline)
+        pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
 
         evaluate_dst_selection(
             pipeline=pipeline,
