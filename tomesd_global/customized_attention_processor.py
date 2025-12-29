@@ -784,7 +784,6 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
         image_rotary_emb: Optional[torch.Tensor] = None,
     ) -> torch.FloatTensor:
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-
         # `sample` projections.
         query = attn.to_q(hidden_states)
         key = attn.to_k(hidden_states)
@@ -804,7 +803,6 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
 
         # the attention in FluxSingleTransformerBlock does not use `encoder_hidden_states`
         if encoder_hidden_states is not None:
-            # `context` projections.
 
             encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
             encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
@@ -836,7 +834,36 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
             query = apply_rotary_emb(query, image_rotary_emb)
             key = apply_rotary_emb(key, image_rotary_emb)
 
-        hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
+        def masked_scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
+            is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
+            L, S = query.size(-2), key.size(-2)
+            scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+            attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+
+            if attn_mask is not None:
+                if attn_mask.dtype == torch.bool:
+                    attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+                else:
+                    attn_bias = attn_mask + attn_bias
+
+            if enable_gqa:
+                key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
+                value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
+
+            attn_weight = query @ key.transpose(-2, -1) * scale_factor
+            import yaml
+            with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
+                config = yaml.safe_load(f)
+            num_of_tiles = config['num_tiles']
+            offset = self._tome_info["args"]["offset"]
+            mask = torch.load(f'/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/mask/mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt')
+            attn_weight[:, :, -4096:, -4096:] = attn_weight[:, :, -4096:, -4096:] + mask 
+            attn_weight += attn_bias
+            attn_weight = torch.softmax(attn_weight, dim=-1)
+            attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+            return attn_weight @ value
+
+        hidden_states = masked_scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
 
@@ -851,7 +878,6 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
             # dropout
             hidden_states = attn.to_out[1](hidden_states)
             encoder_hidden_states = attn.to_add_out(encoder_hidden_states)
-
             return hidden_states, encoder_hidden_states
         else:
             return hidden_states

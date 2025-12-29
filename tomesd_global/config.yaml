@@ -1,8 +1,9 @@
 # config.yaml
 ratio_list: [0]
-num_tiles: 1
-prompt_list: ['draw part of a sheep, cartoon, smooth']
-seed_list: [991]
+num_tiles: 16
+sliding_cycle: 4
+prompt_list: ['fish']
+seed_list: [776]
 toma_variant: "local_stripe"
 num_of_inference_steps: 28
 remark: "New_RoPE"

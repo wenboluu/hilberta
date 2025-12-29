@@ -2,6 +2,7 @@ import torch
 from typing import Type, Dict, Any, Tuple, Callable, Optional, Union, List
 from utils import isinstance_str, init_generator
 from customized_attention_processor import FluxAttnProcessor2_0_for_transformerblock_global
+import yaml
 
 def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
     class ToMeBlock(block_class):
@@ -30,9 +31,9 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
                 **joint_attention_kwargs,
             )
 
-            # # COPY THE ENCODER HIDDEN STATES
-            # encoder_hidden_states = encoder_hidden_states.sum(dim=0) / encoder_hidden_states.shape[0]
-            # encoder_hidden_states = encoder_hidden_states.unsqueeze(0).repeat(num_of_tiles, 1, 1)
+            # COPY THE ENCODER HIDDEN STATES
+            encoder_hidden_states = encoder_hidden_states.sum(dim=0) / encoder_hidden_states.shape[0]
+            encoder_hidden_states = encoder_hidden_states.unsqueeze(0).repeat(num_of_tiles, 1, 1)
 
             attn_output = gate_msa.unsqueeze(1) * attn_output
             hidden_states = hidden_states + attn_output
@@ -94,7 +95,7 @@ def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.
     return ToMeBlock
 
 def apply_patch(
-    transformer_model: torch.nn.Module,
+    model: torch.nn.Module,
     ratio: float = 0.5,
     max_downsample: int = 1,
     sx: int = 2,
@@ -109,50 +110,64 @@ def apply_patch(
     unet_scheduler=None,
     toma_variant=None,
 ):
-    remove_patch(transformer_model)
+    remove_patch(model)
 
-    transformer_model._tome_info = {
-        "size": None,
-        "args": {
-            "ratio": ratio,
-            "max_downsample": max_downsample,
-            "sx": sx,
-            "sy": sy,
-            "use_rand": use_rand,
-            "generator": None,
-            "merge_attn": merge_attn,
-            "merge_crossattn": merge_crossattn,
-            "merge_mlp": merge_mlp,
-            "dst_selection": dst_selection,
-            "k":  num_tiles * 4,
-            "merge_method": merge_method,
-            "unet_scheduler": unet_scheduler,
-            "sliding_method": "stay",
-        },
-    }
+    transformer_model = model
+
+    with open('/scratch/sz3684/reorder_local_attention/tomesd_global/config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+    num_of_tiles = config['num_tiles']
+    sliding_cycle = config['sliding_cycle']
+
+    info_list = []
+    for i in range(sliding_cycle):
+        transformer_model._tome_info = {
+            "size": None,
+            "args": {
+                "ratio": ratio,
+                "max_downsample": max_downsample,
+                "sx": sx,
+                "sy": sy,
+                "use_rand": use_rand,
+                "generator": None,
+                "merge_attn": merge_attn,
+                "merge_crossattn": merge_crossattn,
+                "merge_mlp": merge_mlp,
+                "dst_selection": dst_selection,
+                "k":  num_tiles * 4,
+                "merge_method": merge_method,
+                "unet_scheduler": unet_scheduler,
+                "offset": (4096//num_of_tiles)//sliding_cycle * i,
+            },
+        }
+        info_list.append(transformer_model._tome_info)
     
-    import types
-    from reorder_utils import customized_forward
-    
+
     make_tome_block_fn = make_diffusers_flux_tome_block
     make_single_tome_block_fn = make_flux_single_block
 
+    counter = 0 
     for _, module in transformer_model.named_modules():
         if isinstance_str(module, "FluxTransformerBlock"):
             module.__class__ = make_tome_block_fn(module.__class__)
-            module._tome_info = transformer_model._tome_info
             module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
-            module.attn.processor._tome_info = module._tome_info
+            info_counter = counter % sliding_cycle
+            module._tome_info = info_list[info_counter]
+            module.attn.processor._tome_info = info_list[info_counter]
+            counter += 1
         elif isinstance_str(module, "FluxSingleTransformerBlock"):
             module.__class__ = make_single_tome_block_fn(module.__class__)
-            module._tome_info = transformer_model._tome_info
             module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
-            module.attn.processor._tome_info = module._tome_info
-    return transformer_model
+            info_counter = counter % sliding_cycle
+            module._tome_info = info_list[info_counter]
+            module.attn.processor._tome_info = info_list[info_counter]
+            counter += 1
+    return model
 
 def remove_patch(model: torch.nn.Module):
     """Removes a patch from a ToMe Diffusion module if it was already patched."""
     # For diffusers
+
     for _, module in model.named_modules():
         if module.__class__.__name__ == "ToMeBlock":
             module.__class__ = module._parent

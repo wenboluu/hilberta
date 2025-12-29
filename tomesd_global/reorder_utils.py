@@ -53,8 +53,8 @@ def untile(x_tiled, num_tiles):
     return x_tiles.view(B, H * W, C)
 
 def hilbert_tile(x, reverse, offset=0):
-    if reverse:
-        x = x.flip(1)
+    # if reverse:
+    #     x = x.flip(1)
     hilbert_index = get_hilbert_flat_indices(6).to(x.device)
     hilbert_index_offset = torch.cat([hilbert_index[offset:], hilbert_index[:offset]])
     return torch.gather(x, 1, hilbert_index_offset.unsqueeze(0).unsqueeze(-1).repeat(x.shape[0], 1, x.shape[-1]))
@@ -70,109 +70,100 @@ def hilbert_untile(x_hilbert, reverse, offset=0):
 
     return torch.gather(x_hilbert, 1, inverse_index.unsqueeze(0).unsqueeze(-1).repeat(x_hilbert.shape[0], 1, x_hilbert.shape[-1]))
 
+def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = False, offset = 0):
+    """
+    Reorders the image part of rotary embeddings and hidden states using Hilbert curve,
+    tiles them for each image patch, and prepares them for model input.
+ 
+    Args:
+        image_rotary_emb (tuple of torch.Tensor): Tuple of (rotary_emb_1, rotary_emb_2),
+            each of shape [512 + H*W, dim], where 512 is text embedding and the rest is image.
+        hidden_states (torch.Tensor): Input hidden states of shape [B, N, C], where N = H * W.
+        encoder_hidden_states (torch.Tensor): Encoder context, shape [1, seq_len, C] or [B, seq_len, C].
+        num_tiles (int): Number of spatial tiles to split image into (e.g., 16 for 4x4).
 
-def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states,
-                          num_tiles, reverse=False, offset=0):
-    # Unpack
+    Returns:
+        image_rotary_emb: Tuple of reordered and tiled rotary embeddings
+        hidden_states: Reordered and reshaped hidden states [B * num_tiles, tile_len, C]
+        encoder_hidden_states: Tiled encoder hidden states [B * num_tiles, ..., C]
+    """
     image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
 
-    # Split into text / image parts
-    text_emb_1 = image_rotary_emb_1[:512]
-    image_emb_1 = image_rotary_emb_1[512:]
-    text_emb_2 = image_rotary_emb_2[:512]
-    image_emb_2 = image_rotary_emb_2[512:]
+    # Split rotary embeddings into text and image parts
+    text_emb_1, image_emb_1 = image_rotary_emb_1[:512], image_rotary_emb_1[512:]
+    text_emb_2, image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
 
-    # Tile + reorder image parts
+    # Tile and reorder image embeddings with Hilbert curve
     tiled_image_emb_1 = hilbert_tile(image_emb_1.unsqueeze(0), reverse, offset).squeeze(0)
     tiled_image_emb_2 = hilbert_tile(image_emb_2.unsqueeze(0), reverse, offset).squeeze(0)
 
-    # Build the new rotary embeddings
-    text_emb_1_rep = text_emb_1.repeat(num_tiles, 1, 1)
+    # Repeat text embedding for each tile
+    text_emb_1 = text_emb_1.repeat(num_tiles, 1, 1)
     tiled_image_emb_1 = tiled_image_emb_1.view(num_tiles, -1, tiled_image_emb_1.shape[-1])
-    out_rot1 = torch.cat([text_emb_1_rep, tiled_image_emb_1], dim=1)
+    image_rotary_emb_1 = torch.cat([text_emb_1, tiled_image_emb_1], dim=1)
 
-    text_emb_2_rep = text_emb_2.repeat(num_tiles, 1, 1)
+    text_emb_2 = text_emb_2.repeat(num_tiles, 1, 1)
     tiled_image_emb_2 = tiled_image_emb_2.view(num_tiles, -1, tiled_image_emb_2.shape[-1])
-    out_rot2 = torch.cat([text_emb_2_rep, tiled_image_emb_2], dim=1)
+    image_rotary_emb_2 = torch.cat([text_emb_2, tiled_image_emb_2], dim=1)
 
-    # Reorder hidden_states
-    tiled_hs = hilbert_tile(hidden_states, reverse, offset)
-    B, N, C = tiled_hs.shape
-    out_hs = tiled_hs.view(B * num_tiles, -1, C)
+    image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
 
-    # Tile encoder context if needed
+    # Reorder hidden states
+    hidden_states = hilbert_tile(hidden_states, reverse, offset)
+    B, N, C = hidden_states.shape
+    hidden_states = hidden_states.view(B * num_tiles, -1, C)
+
+    # Tile encoder hidden states
     if encoder_hidden_states.shape[0] != num_tiles:
-        out_enc = encoder_hidden_states.repeat(num_tiles, 1, 1)
+        encoder_hidden_states = encoder_hidden_states.repeat(num_tiles, 1, 1)
     else:
-        out_enc = encoder_hidden_states
-
-    # Stash outputs
-    image_rotary_emb = (out_rot1, out_rot2)
-    hidden_states = out_hs
-    encoder_hidden_states = out_enc
-
-    # --- cleanup: delete everything else ---
-    for v in [
-        image_rotary_emb_1, image_rotary_emb_2,
-        text_emb_1, text_emb_2,
-        image_emb_1, image_emb_2,
-        tiled_image_emb_1, tiled_image_emb_2,
-        text_emb_1_rep, text_emb_2_rep,
-        tiled_hs, out_hs
-    ]:
-        del v
-
-    # free any cached GPU memory (if on GPU)
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+        encoder_hidden_states = encoder_hidden_states
 
     return image_rotary_emb, hidden_states, encoder_hidden_states
 
+def recover_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = False, offset=0):
+    """
+    Recovers original ordering from Hilbert-tiled embeddings and hidden states.
 
-def recover_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states,
-                            num_tiles, reverse=False, offset=0):
-    # Unpack
-    rot1, rot2 = image_rotary_emb
+    Args:
+        image_rotary_emb (tuple): (image_rotary_emb_1, image_rotary_emb_2),
+            each of shape [num_tiles, seq_len, dim]
+        hidden_states (torch.Tensor): Shape [B * num_tiles, tile_len, C]
+        encoder_hidden_states (torch.Tensor): Shape [B * num_tiles, enc_seq_len, C]
+        num_tiles (int): Number of tiles per original batch
+        offset (int): Hilbert offset used during tiling
 
-    # Split off text / tiled image
-    text1 = rot1[:, :512]
-    tile1 = rot1[:, 512:]
-    text2 = rot2[:, :512]
-    tile2 = rot2[:, 512:]
+    Returns:
+        image_rotary_emb: Tuple of [512 + HW, dim] restored rotary embeddings
+        hidden_states: [B, HW, C] recovered hidden states
+        encoder_hidden_states: [B, enc_seq_len, C] recovered encoder context
+    """
+    image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
 
-    # Flatten tiles
-    flat1 = tile1.reshape(-1, tile1.shape[-1])
-    flat2 = tile2.reshape(-1, tile2.shape[-1])
+    # Split text + image parts
+    text_emb_1, tiled_image_emb_1 = image_rotary_emb_1[:, :512], image_rotary_emb_1[:, 512:]
+    text_emb_2, tiled_image_emb_2 = image_rotary_emb_2[:, :512], image_rotary_emb_2[:, 512:]
 
-    # Untile
-    rec1 = hilbert_untile(flat1.unsqueeze(0), reverse, offset).squeeze(0)
-    rec2 = hilbert_untile(flat2.unsqueeze(0), reverse, offset).squeeze(0)
+    # Merge tiles back to [num_tiles * tile_len, dim]
+    flat_image_emb_1 = tiled_image_emb_1.reshape(-1, tiled_image_emb_1.shape[-1])
+    flat_image_emb_2 = tiled_image_emb_2.reshape(-1, tiled_image_emb_2.shape[-1])
 
-    # Reattach text prefix (all tiles share the same text, so just take the first row)
-    txt1 = text1[0]
-    txt2 = text2[0]
-    out_rot1 = torch.cat([txt1, rec1], dim=0)
-    out_rot2 = torch.cat([txt2, rec2], dim=0)
+    # Undo Hilbert ordering
+    recovered_image_emb_1 = hilbert_untile(flat_image_emb_1.unsqueeze(0), reverse, offset).squeeze(0)
+    recovered_image_emb_2 = hilbert_untile(flat_image_emb_2.unsqueeze(0), reverse, offset).squeeze(0)
 
-    # Recover hidden_states
+    # Merge text + image
+    text_emb_1 = text_emb_1[0]  # All tiles share same text
+    text_emb_2 = text_emb_2[0]
+    image_rotary_emb_1 = torch.cat([text_emb_1, recovered_image_emb_1], dim=0)
+    image_rotary_emb_2 = torch.cat([text_emb_2, recovered_image_emb_2], dim=0)
+    image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
+
     B = hidden_states.shape[0] // num_tiles
-    flat_hs = hidden_states.reshape(B, -1, hidden_states.shape[-1])
-    out_hs = hilbert_untile(flat_hs, reverse, offset)
+    flat_hidden = hidden_states.reshape(B, -1, hidden_states.shape[-1])
+    hidden_states = hilbert_untile(flat_hidden, reverse, offset)
 
-    # encoder_hidden_states typically already [B*num_tiles, seq, C]; you can average back if desired
-    out_enc = encoder_hidden_states
-
-    # Stash outputs
-    image_rotary_emb = (out_rot1, out_rot2)
-    hidden_states = out_hs
-    encoder_hidden_states = out_enc
-
-    # --- cleanup ---
-    for v in [rot1, rot2, text1, text2, tile1, tile2, flat1, flat2, rec1, rec2, flat_hs, out_hs]:
-        del v
-
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    # encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True)
 
     return image_rotary_emb, hidden_states, encoder_hidden_states
 
@@ -199,7 +190,7 @@ def customized_forward(
             config = yaml.safe_load(f)
         return config
 
-    config = load_config("/scratch/sz3684/reorder_local_attention/tomesd_global/config.yaml")
+    config = load_config("/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml")
 
     num_tiles = config['num_tiles'] if 'num_tiles' in config else 16
 
@@ -261,8 +252,6 @@ def customized_forward(
         # Reverse every one step
         reverse = counter % 2 == 0
         tile_flag =  counter not in [i for i in range(0, 19, 2*cycle + 1)]
-        # tile_flag = tile_flag and t >=10
-        tile_flag = t>=0
         if tile_flag:
             # hilbert tile before each block        
             image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
@@ -294,8 +283,6 @@ def customized_forward(
         # Reverse every one step
         reverse = counter % 2 == 0
         tile_flag =  counter not in [i for i in range(0, 38, 2*cycle + 1)]
-        # tile_flag = tile_flag and t >=10
-        tile_flag = t>=0
         if tile_flag:
             # hilbert tile before each block
             image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
@@ -342,6 +329,3 @@ def customized_forward(
         return (output,)
 
     return Transformer2DModelOutput(sample=output)
-
-
-

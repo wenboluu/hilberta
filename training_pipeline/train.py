@@ -1007,7 +1007,7 @@ def main(args):
 
     ########################### Set Customized Forward for the Studnet transformer ###########################
     sys.path.append(os.path.dirname(__file__))
-    from reorder_utils import customized_forward
+    from masking_utils import customized_forward
     transformer.forward = types.MethodType(customized_forward, transformer)
     from patch import apply_patch
     from flux_scheduler import FluxScheduler
@@ -1575,9 +1575,9 @@ def main(args):
                                     removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
                                     shutil.rmtree(removing_checkpoint)
 
-                        # save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                        # accelerator.save_state(save_path)
-                        # logger.info(f"Saved state to {save_path}")
+                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                        accelerator.save_state(save_path)
+                        logger.info(f"Saved state to {save_path}")
 
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)

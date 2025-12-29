@@ -8,13 +8,12 @@
 #SBATCH --account=pr_133_tandon_priority
 #SBATCH --mem=120G
 #SBATCH --requeue
-
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=sz3684
 
-module purge
-
 # Activate the environment and run the training script
+source /scratch/sz3684/ICML/flux_ICML_rebuttal/penv/bin/activate
 conda activate /scratch/sz3684/ICML/flux_ICML_rebuttal/penv
+
 cd /scratch/sz3684/reorder_local_attention/training_pipeline
 bash train.sh

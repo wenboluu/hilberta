@@ -276,7 +276,6 @@ def get_hilbert_flat_indices(p: int) -> torch.Tensor:
 
     return torch.tensor(indices, dtype=torch.long)
 
-
 def get_inverse_hilbert_indices(p: int) -> torch.Tensor:
     hilbert = get_hilbert_flat_indices(p)
     inverse = torch.empty_like(hilbert)

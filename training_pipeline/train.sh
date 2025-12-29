@@ -8,7 +8,7 @@ echo "Running experiment: $EXP_NAME"
 
 # This exp checks the smaller local mask 16(height) x 24(width)
 
-accelerate launch ./training_pipeline/train.py \
+accelerate launch train.py \
   --pretrained_model_name_or_path=$MODEL_PATH  \
   --instance_data_dir=$INSTANCE_DIR \
   --output_dir=$OUTPUT_DIR \
@@ -24,7 +24,7 @@ accelerate launch ./training_pipeline/train.py \
   --lr_scheduler="constant" \
   --lr_warmup_steps=0 \
   --max_train_steps=50000 \
-  --checkpointing_steps=1000 \
+  --checkpointing_steps=500 \
   --validation_prompt="A photo of dog in a bucket" \
   --validation_epochs=1 \
   --gradient_checkpointing \
