@@ -1007,8 +1007,25 @@ def main(args):
 
     ########################### Set Customized Forward for the Studnet transformer ###########################
     sys.path.append(os.path.dirname(__file__))
-    # from reorder_utils import customized_forward
-    # transformer.forward = types.MethodType(customized_forward, transformer)
+    from reorder_utils import customized_forward
+    transformer.forward = types.MethodType(customized_forward, transformer)
+    from patch import apply_patch
+    from flux_scheduler import FluxScheduler
+    flux_scheduler = FluxScheduler(
+        timesteps=5,
+        dst_recompute_timesteps = [_ for _ in range(0, 35)],
+        attn_recompute_timesteps = [_ for _ in range(0, 35)],
+        merge_step = [_ for _ in range(1, 35, 1)],
+        config_path="/scratch/sz3684/reorder_local_attention/tomesd_global/transformer_layer_config.yaml",
+    )
+    apply_patch(
+        transformer,
+        ratio=[0],
+        dst_selection='local_stripe_wise_facility',
+        num_tiles=1,
+        merge_method= "attention",
+        unet_scheduler=flux_scheduler,
+        toma_variant="local_stripe")
     ########################### Set Customized Forward for the Studnet transformer ###########################
 
     # We only train the additional adapter LoRA layers

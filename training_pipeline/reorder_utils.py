@@ -57,18 +57,25 @@ def hilbert_tile(x, reverse, offset=0):
         x = x.flip(1)
     hilbert_index = get_hilbert_flat_indices(6).to(x.device)
     hilbert_index_offset = torch.cat([hilbert_index[offset:], hilbert_index[:offset]])
-    return torch.gather(x, 1, hilbert_index_offset.unsqueeze(0).unsqueeze(-1).repeat(x.shape[0], 1, x.shape[-1]))
+    index = hilbert_index_offset.unsqueeze(0).expand(x.shape[0], -1).unsqueeze(-1).expand(-1, -1, x.shape[-1])
+    output = torch.gather(x, 1, index)
+    del hilbert_index
+    del index
+    torch.cuda.empty_cache()
+    return output
 
 def hilbert_untile(x_hilbert, reverse, offset=0):
-    # if reverse:
-    #     x_hilbert = x_hilbert.flip(1)
     inverse_index = get_inverse_hilbert_indices(6).to(x_hilbert.device)
-    if reverse:
-        inverse_index = inverse_index.flip(0)
     if offset > 0:
         x_hilbert = torch.cat([x_hilbert[:, -offset:], x_hilbert[:, :-offset]], dim=1)
 
-    return torch.gather(x_hilbert, 1, inverse_index.unsqueeze(0).unsqueeze(-1).repeat(x_hilbert.shape[0], 1, x_hilbert.shape[-1]))
+    batch_size, _, dim = x_hilbert.shape
+    index = inverse_index.view(1, -1, 1).expand(batch_size, -1, dim)
+    output = torch.gather(x_hilbert, 1, index)
+    del inverse_index
+    del index
+    torch.cuda.empty_cache()
+    return output
 
 def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = False, offset = 0):
     """
@@ -98,11 +105,13 @@ def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states
     tiled_image_emb_2 = hilbert_tile(image_emb_2.unsqueeze(0), reverse, offset).squeeze(0)
 
     # Repeat text embedding for each tile
-    text_emb_1 = text_emb_1.repeat(num_tiles, 1, 1)
+    # text_emb_1 = text_emb_1.repeat(num_tiles, 1, 1)
+    text_emb_1 = text_emb_1.unsqueeze(0)
     tiled_image_emb_1 = tiled_image_emb_1.view(num_tiles, -1, tiled_image_emb_1.shape[-1])
     image_rotary_emb_1 = torch.cat([text_emb_1, tiled_image_emb_1], dim=1)
 
-    text_emb_2 = text_emb_2.repeat(num_tiles, 1, 1)
+    # text_emb_2 = text_emb_2.repeat(num_tiles, 1, 1)
+    text_emb_2 = text_emb_2.unsqueeze(0)
     tiled_image_emb_2 = tiled_image_emb_2.view(num_tiles, -1, tiled_image_emb_2.shape[-1])
     image_rotary_emb_2 = torch.cat([text_emb_2, tiled_image_emb_2], dim=1)
 
@@ -114,10 +123,17 @@ def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states
     hidden_states = hidden_states.view(B * num_tiles, -1, C)
 
     # Tile encoder hidden states
-    if encoder_hidden_states.shape[0] != num_tiles:
-        encoder_hidden_states = encoder_hidden_states.repeat(num_tiles, 1, 1)
-    else:
-        encoder_hidden_states = encoder_hidden_states
+    # if encoder_hidden_states.shape[0] != num_tiles:
+        # encoder_hidden_states = encoder_hidden_states.repeat(num_tiles, 1, 1)
+    # else:
+        # encoder_hidden_states = encoder_hidden_states
+
+    # import pdb; pdb.set_trace()
+
+    del image_emb_1, image_emb_2
+    del tiled_image_emb_1, tiled_image_emb_2
+    del text_emb_1, text_emb_2
+    torch.cuda.empty_cache()
 
     return image_rotary_emb, hidden_states, encoder_hidden_states
 
@@ -163,7 +179,12 @@ def recover_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_stat
     flat_hidden = hidden_states.reshape(B, -1, hidden_states.shape[-1])
     hidden_states = hilbert_untile(flat_hidden, reverse, offset)
 
-    # encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True)
+    del tiled_image_emb_1, tiled_image_emb_2
+    del flat_image_emb_1, flat_image_emb_2
+    del text_emb_1, text_emb_2
+    del flat_hidden
+    torch.cuda.empty_cache()
+
 
     return image_rotary_emb, hidden_states, encoder_hidden_states
 
@@ -245,15 +266,13 @@ def customized_forward(
     counter = 0
     off_set_counter = 0 
     cycle = 2
+    reverse = False
     off_set_unit = (N//num_tiles)//cycle
     for index_block, block in enumerate(self.transformer_blocks):
         off_set_counter = ((counter//2)%cycle) * off_set_unit
 
         # Reverse every one step
-        reverse = counter % 2 == 0
-        tile_flag =  counter not in [i for i in range(0, 19, 2*cycle + 1)]
-        # tile_flag = tile_flag and t >=10
-        tile_flag = t>=0
+        tile_flag = True
         if tile_flag:
             # hilbert tile before each block        
             image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
@@ -261,9 +280,9 @@ def customized_forward(
             )
         else:
             encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True)
-            # encoder_hidden_states = encoder_hidden_states[0].unsqueeze(0)
 
         # Entering the block
+        print(f'Memory usage before Joint Transformer block {counter}: {torch.cuda.memory_allocated() / 1024**3} GB')
         encoder_hidden_states, hidden_states = block(
             hidden_states=hidden_states,
             encoder_hidden_states=encoder_hidden_states,
@@ -271,9 +290,9 @@ def customized_forward(
             image_rotary_emb=image_rotary_emb,
             joint_attention_kwargs=joint_attention_kwargs,
         )
+        print(f'Memory usage after Joint Transformer block {counter}: {torch.cuda.memory_allocated() / 1024**3} GB')
 
         if tile_flag:
-            # hilbert untile after each block
             image_rotary_emb, hidden_states, encoder_hidden_states = recover_hilbert_reorder(
                 image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse=reverse, offset = off_set_counter
             )
@@ -283,18 +302,14 @@ def customized_forward(
         off_set_counter = ((counter//2)%cycle) * off_set_unit
 
         # Reverse every one step
-        reverse = counter % 2 == 0
-        tile_flag =  counter not in [i for i in range(0, 38, 2*cycle + 1)]
-        # tile_flag = tile_flag and t >=10
-        tile_flag = t>=0
+        tile_flag = True
         if tile_flag:
-            # hilbert tile before each block
             image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
                 image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
             )
         else:
             encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True)
-            # encoder_hidden_states = encoder_hidden_states[0].unsqueeze(0)
+
 
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
@@ -305,6 +320,8 @@ def customized_forward(
             image_rotary_emb=image_rotary_emb,
             joint_attention_kwargs=joint_attention_kwargs,
         )
+
+        print(f'Memory usage after Single Transformer block {counter}: {torch.cuda.memory_allocated() / 1024**3} GB')
 
         encoder_hidden_states, hidden_states = hidden_states[:, :encoder_hidden_states.shape[1], :], hidden_states[:, encoder_hidden_states.shape[1]:, :]
 

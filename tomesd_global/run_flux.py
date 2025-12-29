@@ -39,7 +39,7 @@ def generate_image(
     )
     #********************************************************************************************************************
     flux_scheduler = FluxScheduler(
-        timesteps=28,
+        timesteps=5,
         dst_recompute_timesteps = recompute_step,
         attn_recompute_timesteps = recompute_step,
         merge_step = merge_step,

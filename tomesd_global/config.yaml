@@ -1,6 +1,6 @@
 # config.yaml
 ratio_list: [0]
-num_tiles: 64
+num_tiles: 1
 prompt_list: ['draw part of a sheep, cartoon, smooth']
 seed_list: [991]
 toma_variant: "local_stripe"

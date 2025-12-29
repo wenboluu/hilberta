@@ -14,9 +14,7 @@
 
 module purge
 
-TARGET_PATH=$(dirname "$(realpath "$0")")
-
 # Activate the environment and run the training script
 conda activate /scratch/sz3684/ICML/flux_ICML_rebuttal/penv
-cd $TARGET_PATH
+cd /scratch/sz3684/reorder_local_attention/training_pipeline
 bash train.sh
