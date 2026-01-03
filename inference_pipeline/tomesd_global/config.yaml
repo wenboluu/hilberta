@@ -1,0 +1,10 @@
+# config.yaml
+ratio_list: [0]
+num_tiles: 16
+sliding_cycle: 4
+prompt_list: ['capybara']
+seed_list: [10008, 997]
+toma_variant: "local_stripe"
+num_of_inference_steps: 28
+remark: "New_RoPE"
+merge_step_interval: 3

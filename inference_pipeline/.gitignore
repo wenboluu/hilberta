@@ -6,11 +6,7 @@ output/
 tomesd_global/__pycache__/
 
 # Ignore everything inside the directory, including hidden files
+tomesd_global_backup/**/*
 output/**/*
 flux_todo/**/*
-dataset/
-wandb/
-tomesd_global_complete/
-training_pipeline/__pycache__
 mask/
-training_pipeline/exp_output/

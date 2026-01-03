@@ -2,7 +2,7 @@ EXP_NAME=$(basename "$PWD")
 
 export MODEL_PATH="/scratch/sz3684/.cache/models--black-forest-labs--FLUX.1-dev/snapshots/0ef5fff789c832c5c7f4e127f94c8b54bbcced44"
 export INSTANCE_DIR="/scratch/sz3684/reorder_local_attention/dataset/cache_dataset"
-export OUTPUT_DIR="exp_output"
+export OUTPUT_DIR="exp_output_with_sdpa"
 
 echo "Running experiment: $EXP_NAME"
 
