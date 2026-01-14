@@ -195,6 +195,7 @@ if __name__ == "__main__":
     num_of_inference_steps = config['num_of_inference_steps']
     remark = config['remark']
     merge_step_interval = config['merge_step_interval']
+    output_folder = config['output_folder']
 
     recompute_step = [_ for _ in range(0, 35)]
     print('recompute_step', recompute_step)
@@ -216,7 +217,7 @@ if __name__ == "__main__":
         prompt_list = prompt_list
         seed_list = seed_list
         dst_method = dst_method
-        output_folder = f"/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/output/{toma_variant}/{ratio}"
+        output_folder = output_folder
         results_file_path = f"time.md"
         device = "cuda:5"
 
@@ -231,6 +232,8 @@ if __name__ == "__main__":
         from masking_utils import customized_forward, customized_call
         pipeline.customized_call = types.MethodType(customized_call, pipeline)
         pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
+
+        pipeline.load_lora_weights("/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/lora_weight/checkpoint-2817")
 
         evaluate_dst_selection(
             pipeline=pipeline,

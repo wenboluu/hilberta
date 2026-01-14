@@ -887,3 +887,5 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
             return hidden_states, encoder_hidden_states
         else:
             return hidden_states
+        
+
