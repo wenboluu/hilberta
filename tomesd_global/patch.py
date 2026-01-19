@@ -117,6 +117,7 @@ def apply_patch(
     merge_method: str = "original",
     unet_scheduler=None,
     toma_variant=None,
+    height=None,
 ):
     remove_patch(model)
 
@@ -131,6 +132,11 @@ def apply_patch(
         config = yaml.safe_load(f)
     num_of_tiles = config['num_tiles']
     sliding_cycle = config['sliding_cycle']
+
+    if height == 1024:
+        image_size = 4096
+    elif height == 2048:
+        image_size = 16384
 
     info_list = []
     for i in range(sliding_cycle):
@@ -150,7 +156,7 @@ def apply_patch(
                 "k":  num_tiles * 4,
                 "merge_method": merge_method,
                 "unet_scheduler": unet_scheduler,
-                "offset": (4096//num_of_tiles)//sliding_cycle * i,
+                "offset": (image_size//num_of_tiles)//sliding_cycle * i,
             },
         }
         info_list.append(transformer_model._tome_info)

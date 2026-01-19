@@ -8,6 +8,6 @@ toma_variant: "local_stripe"
 num_of_inference_steps: 28
 remark: "New_RoPE"
 merge_step_interval: 3
-full_attn_step: [0, 1, 2, 25, 26, 27]
-full_attn_layer: [0, 5, 10, 15, 20, 25, 30, 35]
+full_attn_step: []
+full_attn_layer: []
 output_folder: "/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/output/lora"

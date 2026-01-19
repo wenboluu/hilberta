@@ -19,7 +19,10 @@ import inspect
 logger = logging.get_logger(__name__) 
 
 def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
-    hilbert_index = get_hilbert_flat_indices(6).to(x.device)
+    if x.shape[1] == 4096:
+        hilbert_index = get_hilbert_flat_indices(6).to(x.device)
+    elif x.shape[1] == 16384:
+        hilbert_index = get_hilbert_flat_indices(7).to(x.device)
 
     ################################# Make complete hilbert index #################################
     index = torch.arange(hilbert_index.numel()).to(x.device)    
@@ -68,31 +71,57 @@ def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
     
     mask = torch.full((seq_len, seq_len), float('-inf'), device=x.device)
     mask[pairs[:, 0], pairs[:, 1]] = 0.0   
-    
-    for i in range(24, 40):
-        start = i*64 + 24
+
+    if x.shape[1] == 4096:
+        for i in range(24, 40):
+            start = i*64 + 24
         end = i*64 + 40 
         mask[start:end, :] = 0.0
         mask[:, start:end] = 0.0
     
-    corner_size = 4
-    seq_len = 4096
+        corner_size = 4
+        seq_len = 4096
 
-    # Top-left corner
-    mask[0:corner_size, :] = 0.0  
-    mask[:, 0:corner_size] = 0.0  
+        # Top-left corner
+        mask[0:corner_size, :] = 0.0  
+        mask[:, 0:corner_size] = 0.0  
 
-    # Top-right corner
-    mask[0:corner_size, seq_len-corner_size:seq_len] = 0.0
-    mask[:, seq_len-corner_size:seq_len] = 0.0
+        # Top-right corner
+        mask[0:corner_size, seq_len-corner_size:seq_len] = 0.0
+        mask[:, seq_len-corner_size:seq_len] = 0.0
 
-    # Bottom-left corner
-    mask[seq_len-corner_size:seq_len, 0:corner_size] = 0.0
-    mask[:, 0:corner_size] = 0.0
+        # Bottom-left corner
+        mask[seq_len-corner_size:seq_len, 0:corner_size] = 0.0
+        mask[:, 0:corner_size] = 0.0
 
-    # Bottom-right corner
-    mask[seq_len-corner_size:seq_len, seq_len-corner_size:seq_len] = 0.0
-    mask[:, seq_len-corner_size:seq_len] = 0.0
+        # Bottom-right corner
+        mask[seq_len-corner_size:seq_len, seq_len-corner_size:seq_len] = 0.0
+        mask[:, seq_len-corner_size:seq_len] = 0.0
+    elif x.shape[1] == 16384:
+        for i in range(48, 80):
+            start = i*64 + 48
+            end = i*64 + 80
+            mask[start:end, :] = 0.0
+            mask[:, start:end] = 0.0
+
+        corner_size = 4
+        seq_len = 16384
+
+        # Top-left corner
+        mask[0:corner_size, :] = 0.0  
+        mask[:, 0:corner_size] = 0.0  
+
+        # Top-right corner
+        mask[0:corner_size, seq_len-corner_size:seq_len] = 0.0
+        mask[:, seq_len-corner_size:seq_len] = 0.0
+
+        # Bottom-left corner
+        mask[seq_len-corner_size:seq_len, 0:corner_size] = 0.0
+        mask[:, 0:corner_size] = 0.0
+
+        # Bottom-right corner
+        mask[seq_len-corner_size:seq_len, seq_len-corner_size:seq_len] = 0.0
+        mask[:, seq_len-corner_size:seq_len] = 0.0
     return mask
 
 def customized_forward(
@@ -167,7 +196,7 @@ def customized_forward(
 
         for offset in offset_list:
             mask = create_hilbert_tile_mask(hidden_states, num_of_tiles=num_of_tiles, offset=offset)
-            with open(f'./mask/mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt', 'wb') as f:
+            with open(f'./mask/{hidden_states.shape[1]}_mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt', 'wb') as f:
                 torch.save(mask, f)
 
         for index_block, block in enumerate(self.transformer_blocks):
