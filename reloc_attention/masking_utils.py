@@ -101,8 +101,8 @@ def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
         mask[:, seq_len-corner_size:seq_len] = 0.0
     elif x.shape[1] == 16384:
         for i in range(48, 80):
-            start = i*64 + 48
-            end = i*64 + 80
+            start = i*128 + 48
+            end = i*128 + 80
             mask[start:end, :] = 0.0
             mask[:, start:end] = 0.0
 
