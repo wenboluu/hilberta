@@ -10,4 +10,7 @@ tomesd_global_backup/**/*
 output/**/*
 flux_todo/**/*
 mask/
+mask_list/
+tomesd_global/__pycache__/
+inference_pipeline/tomesd_global/__pycache__/
 lora_weight/

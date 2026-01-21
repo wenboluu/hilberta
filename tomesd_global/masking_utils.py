@@ -186,20 +186,23 @@ def customized_forward(
         ids = torch.cat((txt_ids, img_ids), dim=0)
         image_rotary_emb = self.pos_embed(ids)
 
-        # load config 
-        with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
-            config = yaml.safe_load(f)
-        num_of_tiles = config['num_tiles']
-        sliding_cycle = config['sliding_cycle']
+        # # load config 
+        # with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
+        #     config = yaml.safe_load(f)
+        # num_of_tiles = config['num_tiles']
+        # sliding_cycle = config['sliding_cycle']
 
-        offset_list = [((hidden_states.shape[1]//num_of_tiles) //sliding_cycle) * i for i in range(sliding_cycle)]
+        # offset_list = [((hidden_states.shape[1]//num_of_tiles) //sliding_cycle) * i for i in range(sliding_cycle)]
 
-        os.makedirs('./mask', exist_ok=True)
+        # os.makedirs('./mask', exist_ok=True)
 
-        for offset in offset_list:
-            mask = create_hilbert_tile_mask(hidden_states, num_of_tiles=num_of_tiles, offset=offset)
-            with open(f'./mask/{hidden_states.shape[1]}_mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt', 'wb') as f:
-                torch.save(mask, f)
+        # for offset in offset_list:
+        #     mask = create_hilbert_tile_mask(hidden_states, num_of_tiles=num_of_tiles, offset=offset)
+        #     with open(f'./mask/mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt', 'wb') as f:
+        #         torch.save(mask, f)
+
+        # os._exit(0)
+
 
         for index_block, block in enumerate(self.transformer_blocks):
             if self.training and self.gradient_checkpointing:

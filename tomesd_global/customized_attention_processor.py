@@ -32,6 +32,35 @@ mask_16384_3072_4 = torch.load('/home/sz3684/diffusion/reorder_local_attention/d
 mask_list = {'4096_0_4': mask_4096_0_4, '4096_256_4': mask_4096_256_4, '4096_512_4': mask_4096_512_4, '4096_768_4': mask_4096_768_4, '16384_0_4': mask_16384_0_4, '16384_1024_4': mask_16384_1024_4, '16384_2048_4': mask_16384_2048_4, '16384_3072_4': mask_16384_3072_4}
 
 
+# Load mask files from mask_list directory
+mask_dir = '/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/mask_list'
+
+# Load 4096 masks with 4 tiles
+mask_4096_0_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+mask_4096_256_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_256_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+mask_4096_512_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_512_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+mask_4096_768_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_768_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+
+# Load 4096 masks with 16 tiles
+mask_4096_0_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+mask_4096_64_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_64_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+mask_4096_128_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_128_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+mask_4096_192_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_192_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+
+# Create mask dictionary
+mask_list = {
+    # 4096 masks with 4 tiles
+    '4096_0_4': mask_4096_0_4,
+    '4096_256_4': mask_4096_256_4,
+    '4096_512_4': mask_4096_512_4,
+    '4096_768_4': mask_4096_768_4,
+    
+    # 4096 masks with 16 tiles
+    '4096_0_16': mask_4096_0_16,
+    '4096_64_16': mask_4096_64_16,
+    '4096_128_16': mask_4096_128_16,
+    '4096_192_16': mask_4096_192_16,
+}
 
 class Attention(nn.Module):
     r"""
@@ -866,16 +895,11 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
 
         attn_mask = torch.zeros(L, S, dtype=query.dtype, device=query.device)
         if step not in full_attn_step and layer_idx not in full_attn_layer:
-            # mask = torch.load(f'/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/mask/{image_size}_mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt')
+            # mask = torch.load(f'/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/mask/mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt')
             mask = mask_list[f'{image_size}_{offset}_{num_of_tiles}'].to(query.device)
             attn_mask[-image_size:, -image_size:] = attn_mask[-image_size:, -image_size:] + mask
-            # del mask
-            # torch.cuda.empty_cache()
-        
+
         hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)
-        # Clean up attention mask memory after use
-        # del attn_mask
-        # torch.cuda.empty_cache()
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
 

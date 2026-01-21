@@ -1,3 +1,6 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+
 import argparse
 import numpy as np
 import itertools
@@ -220,7 +223,7 @@ if __name__ == "__main__":
         dst_method = dst_method
         output_folder = output_folder
         results_file_path = f"time.md"
-        device = "cuda:2"
+        device = "cuda:0"
 
         pipeline = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev",
