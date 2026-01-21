@@ -2,8 +2,8 @@
 ratio_list: [0]
 num_tiles: 4
 sliding_cycle: 4
-prompt_list: [ "A group of men and woman playing a game of frisbee.", "Two skiers are going down a groomed snow hill.", "A bunch of bananas growing out of the side of a tree.", "a close up of a plate with sushi", "A large black bear next to some trees.", "Two pictures at different times show the same intersection", "A total of nine jets are flying in the sky.", "A girl sitting on floor with a laptop next to a dog.", "two hands are holding white video game controllers ", "A black train traveling down train tracks next to a dirt lot." ]
-seed_list: [42]
+prompt_list: [ "lion" ]
+seed_list: [42, 43, 44, 45, 46, 47, 48, 49, 50]
 toma_variant: "local_stripe"
 num_of_inference_steps: 28
 remark: "New_RoPE"

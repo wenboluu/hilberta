@@ -143,8 +143,8 @@ def evaluate_dst_selection(
             random_seed=seed,
             dst_selection=dst_selection,
             max_downsample=4,
-            height=2048,
-            width=2048,
+            height=1024,
+            width=1024,
             num_tiles=num_tiles,
             merge_method=merge_method,
             toma_variant=toma_variant,
@@ -220,7 +220,7 @@ if __name__ == "__main__":
         dst_method = dst_method
         output_folder = output_folder
         results_file_path = f"time.md"
-        device = "cuda:7"
+        device = "cuda:2"
 
         pipeline = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev",
@@ -234,7 +234,7 @@ if __name__ == "__main__":
         pipeline.customized_call = types.MethodType(customized_call, pipeline)
         pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
 
-        pipeline.load_lora_weights("/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/lora_weight/checkpoint-2817")
+        pipeline.load_lora_weights("/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/lora_weight/ckpt_1024_16/checkpoint-2817")
 
         evaluate_dst_selection(
             pipeline=pipeline,
