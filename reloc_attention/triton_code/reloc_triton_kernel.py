@@ -54,8 +54,6 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         K_block_ptr_cur = tl.advance(K_block_ptr, (0, rel_n))
         V_block_ptr_cur = tl.advance(V_block_ptr, (rel_n, 0))
 
-        # tl.device_print(K_block_ptr_cur)
-        # rel_n = tl.multiple_of(rel_n, BLOCK_N)
 
         k = tl.load(K_block_ptr_cur)
         qk = tl.dot(q, k)
@@ -77,6 +75,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
             p = p.to(tl.float8e5)
         else:
             p = p.to(tl.float16)
+        # v = v.to(p.dtype)
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
 

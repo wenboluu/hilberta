@@ -18,7 +18,7 @@ from torch import nn
 
 from utils import isinstance_str, init_generator, apply_rotary_emb
 # Load mask files from mask_list directory
-mask_dir = '/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/mask_list'
+mask_dir = './mask_list'
 
 # Load 4096 masks with 4 tiles
 mask_4096_0_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
@@ -31,18 +31,6 @@ mask_4096_0_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num
 mask_4096_64_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_64_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
 mask_4096_128_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_128_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
 mask_4096_192_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_192_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-
-# Load 16384 masks with 4 tiles
-mask_16384_0_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_0_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-mask_16384_1024_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_1024_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-mask_16384_2048_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_2048_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-mask_16384_3072_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_3072_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-
-# Load 16384 masks with 16 tiles
-mask_16384_0_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_0_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-mask_16384_256_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_256_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-mask_16384_512_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_512_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-mask_16384_768_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_768_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
 
 # Create mask dictionary
 mask_list = {
@@ -57,18 +45,6 @@ mask_list = {
     '4096_64_16': mask_4096_64_16,
     '4096_128_16': mask_4096_128_16,
     '4096_192_16': mask_4096_192_16,
-
-    # 16384 masks with 4 tiles
-    '16384_0_4': mask_16384_0_4,
-    '16384_1024_4': mask_16384_1024_4,
-    '16384_2048_4': mask_16384_2048_4,
-    '16384_3072_4': mask_16384_3072_4,
-
-    # 16384 masks with 16 tiles
-    '16384_0_16': mask_16384_0_16,
-    '16384_256_16': mask_16384_256_16,
-    '16384_512_16': mask_16384_512_16,
-    '16384_768_16': mask_16384_768_16,
 }
 
 class Attention(nn.Module):
@@ -887,33 +863,56 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
 
             query = apply_rotary_emb(query, image_rotary_emb)
             key = apply_rotary_emb(key, image_rotary_emb)
+        
 
-        import yaml
-        with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
-            config = yaml.safe_load(f)
-        num_of_tiles = config['num_tiles']
-        full_attn_step = config['full_attn_step']
-        full_attn_layer = config['full_attn_layer']
+        # ======================Uncomment For Inference Using Pytorch======================
+        # import yaml
+        # with open('./config.yaml', 'r') as f:
+        #     config = yaml.safe_load(f)
+        # num_of_tiles = config['num_tiles']
+        # full_attn_step = config['full_attn_step']
+        # full_attn_layer = config['full_attn_layer']
 
-        offset = self._tome_info["args"]["offset"]
-        L, S = query.shape[-2], key.shape[-2]
+        # offset = self._tome_info["args"]["offset"]
+        # L, S = query.shape[-2], key.shape[-2]
+        # if L == 4608:
+        #     image_size = 4096
+        # else:
+        #     image_size = 16384
 
-        if L == 4608:
-            image_size = 4096
-        else:
-            image_size = 16384
+        # attn_mask = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+        # if step not in full_attn_step and layer_idx not in full_attn_layer:
+        #     mask = mask_list[f'{image_size}_{offset}_{num_of_tiles}'].to(query.device)
+        #     attn_mask[-image_size:, -image_size:] = attn_mask[-image_size:, -image_size:] + mask
 
-        attn_mask = torch.zeros(L, S, dtype=query.dtype, device=query.device)
-        if step not in full_attn_step and layer_idx not in full_attn_layer:
-            mask = mask_list[f'{image_size}_{offset}_{num_of_tiles}'].to(query.device)
-            # mask = torch.load(f'/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/mask/mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt')
-            # mask = torch.load(f'/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/mask_list/image_size_{image_size}_offset_{offset}_num_of_tiles_{num_of_tiles}.pt')
-            mask = mask.to(query.device)
-            attn_mask[-image_size:, -image_size:] = attn_mask[-image_size:, -image_size:] + mask
+        # hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)
+        # hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+        # hidden_states = hidden_states.to(query.dtype)
+        # ======================Uncomment For Inference Using Pytorch======================
 
-        hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)
+
+
+        # ======================Uncomment For Inference Using Triton======================
+        N_CTX_shared = 512
+        N_CTX = query.shape[-2]
+        GROUPS = 4
+        
+        query_shared = query[:, :, :N_CTX_shared, :]
+
+        # shared_attn_output = F.scaled_dot_product_attention(query_shared, key, value, attn_mask=None, dropout_p=0.0, is_causal=False)
+        from triton_code.reloc_triton_kernel_bf16 import attention
+        image_attn_output = attention(query, key, value, N_CTX_shared, N_CTX, False, GROUPS, False)[:, :, N_CTX_shared:, :]
+
+        # from triton_code.original_code import attention as original_attention
+        # image_attn_output = original_attention(query, key, value, N_CTX, False, False)
+
+        shared_attn_output = F.scaled_dot_product_attention(query_shared, key, value, attn_mask=None, dropout_p=0.0, is_causal=False)
+        hidden_states = torch.cat([shared_attn_output, image_attn_output], dim=2)
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
+        # ======================Uncomment For Inference Using Triton======================
+
+
 
         if encoder_hidden_states is not None:
             encoder_hidden_states, hidden_states = (
@@ -930,4 +929,3 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
         else:
             return hidden_states
         
-

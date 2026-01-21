@@ -5,11 +5,8 @@ flux_todo/
 output/
 
 # Ignore everything inside the directory, including hidden files
-tomesd_global_backup/**/*
-output/**/*
-flux_todo/**/*
-mask/
-mask_list/
+reloc_attention/mask_list/
+reloc_attention/output/
 
 # Ignore all Python cache directories
 **/__pycache__/

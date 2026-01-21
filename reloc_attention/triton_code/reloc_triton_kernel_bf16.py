@@ -15,6 +15,7 @@ Extra Credits:
 
 import pytest
 import torch
+import pdb
 
 import triton
 import triton.language as tl
@@ -26,6 +27,7 @@ except ModuleNotFoundError:
     HAS_TENSOR_DESC = False
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
+# DEVICE = "cuda"
 
 
 def is_hip():
@@ -47,17 +49,24 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     BLOCK_M: tl.constexpr, HEAD_DIM: tl.constexpr, BLOCK_N: tl.constexpr,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
                     N_CTX: tl.constexpr, fp8_v: tl.constexpr, group_start: tl.constexpr, group_end: tl.constexpr):
-    
+
     for rel_n in range(0, group_end - group_start, BLOCK_N):
+        rel_n = tl.multiple_of(rel_n, BLOCK_N)
+
+        if rel_n + BLOCK_N > group_end - group_start:
+            tl.device_print("rel_n =", rel_n)
+            tl.device_print("group_end - group_start =", group_end - group_start)
+            tl.device_print("BLOCK_N =", BLOCK_N)
+            tl.device_print("group_start =", group_start)
+            tl.device_print("group_end =", group_end)
+            tl.device_print("rel_n + BLOCK_N =", rel_n + BLOCK_N)
+
         K_block_ptr_cur = tl.advance(K_block_ptr, (0, rel_n))
         V_block_ptr_cur = tl.advance(V_block_ptr, (rel_n, 0))
-
-        # tl.device_print(K_block_ptr_cur)
-        # rel_n = tl.multiple_of(rel_n, BLOCK_N)
-
+        
         k = tl.load(K_block_ptr_cur)
         qk = tl.dot(q, k)
-
+        
         m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
         qk = qk * qk_scale - m_ij[:, None]
         p = tl.math.exp2(qk)
@@ -70,10 +79,13 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
 
         # update acc
         v = tl.load(V_block_ptr_cur)
-        if fp8_v:
-            p = p.to(tl.float8e5)
-        else:
-            p = p.to(tl.float16)
+        # pdb.set_trace()
+        # if fp8_v:
+        #     p = p.to(tl.float8e5)
+        # else:
+        #     p = p.to(tl.float16)
+        p = p.to(v.dtype)
+        # pdb.set_trace()
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
 
@@ -150,73 +162,97 @@ def keep(conf):
     return True
 
 
-# @triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
+@triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
 @triton.jit
 def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               stride_qz, stride_qh, stride_qm, stride_qk,  #
               stride_kz, stride_kh, stride_kn, stride_kk,  #
               stride_vz, stride_vh, stride_vk, stride_vn,  #
               stride_oz, stride_oh, stride_om, stride_on,  #
-              Z, H, N_CTX,  #
+              Z, H, N_CTX_shared, N_CTX,  #
               HEAD_DIM: tl.constexpr,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
               STAGE: tl.constexpr,  #
               GROUPS: tl.constexpr  #
               ):
+    # Print configuration at runtime
+    tl.device_print("Config: BLOCK_M=", tl.full([1], BLOCK_M, dtype=tl.int32))
+    tl.device_print("BLOCK_N=", tl.full([1], BLOCK_N, dtype=tl.int32))
+    
     tl.static_assert(BLOCK_N <= HEAD_DIM)
-
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
     off_z = off_hz // H
     off_h = off_hz % H
     qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
+    qvk_offset_after_shared = qvk_offset + N_CTX_shared * stride_qm
 
     # Calculate the group index 
-    group_size = N_CTX // GROUPS
-    group_id = (start_m * BLOCK_M) // group_size
-    group_start = group_id * group_size
-    group_end = (group_id + 1) * group_size
+    GROUP_SIZE = N_CTX // GROUPS
+    GROUP_ID = (start_m * BLOCK_M) // GROUP_SIZE
+    GROUP_START = GROUP_ID * GROUP_SIZE
+    GROUP_END = GROUP_START + GROUP_SIZE
 
-    assert BLOCK_M <= group_size, "BLOCK_M must be <= group_size"
-    assert group_size % BLOCK_M == 0, "group_size must be divisible by BLOCK_M"
+    assert BLOCK_M <= GROUP_SIZE, "BLOCK_M must be <= group_size"
+    assert GROUP_SIZE % BLOCK_M == 0, "group_size must be divisible by BLOCK_M"
+    assert GROUP_SIZE % BLOCK_N == 0, "group_size must be divisible by BLOCK_N"
 
-    tl.device_print("group_id =", group_id)
-
+    # tl.device_print("group_id =", group_id)
     # block pointers
     Q_block_ptr = tl.make_block_ptr(
-        base=Q + qvk_offset,
+        base=Q + qvk_offset_after_shared,
         shape=(N_CTX, HEAD_DIM),
         strides=(stride_qm, stride_qk),
         offsets=(start_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, HEAD_DIM),
         order=(1, 0),
     )
-    v_order: tl.constexpr = (0, 1) if V.dtype.element_ty == tl.float8e5 else (1, 0)
-    V_block_ptr = tl.make_block_ptr(
+    V_block_ptr_shared = tl.make_block_ptr(
         base=V + qvk_offset,
-        shape=(N_CTX, HEAD_DIM),
+        shape=(N_CTX_shared, HEAD_DIM),
         strides=(stride_vk, stride_vn),
-        offsets=(0, group_start),
+        offsets=(0, 0),
         block_shape=(BLOCK_N, HEAD_DIM),
-        order=v_order,
+        order=(1, 0),
+    )
+    K_block_ptr_shared = tl.make_block_ptr(
+        base=K + qvk_offset,
+        shape=(HEAD_DIM, N_CTX_shared),
+        strides=(stride_kk, stride_kn),
+        offsets=(0, 0),
+        block_shape=(HEAD_DIM, BLOCK_N),
+        order=(0, 1),
+    )
+    V_block_ptr = tl.make_block_ptr(
+        base=V + qvk_offset_after_shared,
+        shape=(GROUP_SIZE, HEAD_DIM),
+        strides=(stride_vk, stride_vn),
+        offsets=(0, GROUP_START * HEAD_DIM),
+        block_shape=(BLOCK_N, HEAD_DIM),
+        order=(1, 0),
     )
     K_block_ptr = tl.make_block_ptr(
-        base=K + qvk_offset,
-        shape=(HEAD_DIM, N_CTX),
+        base=K + qvk_offset_after_shared,
+        shape=(HEAD_DIM, GROUP_SIZE),
         strides=(stride_kk, stride_kn),
-        offsets=(0, group_start),
+        offsets=(GROUP_START * HEAD_DIM, 0),
         block_shape=(HEAD_DIM, BLOCK_N),
         order=(0, 1),
     )
     O_block_ptr = tl.make_block_ptr(
-        base=Out + qvk_offset,
+        base=Out + qvk_offset_after_shared,
         shape=(N_CTX, HEAD_DIM),
         strides=(stride_om, stride_on),
         offsets=(start_m * BLOCK_M, 0),
         block_shape=(BLOCK_M, HEAD_DIM),
         order=(1, 0),
     )
+    
+    # Add boundary checks for block pointers
+    assert GROUP_START + GROUP_SIZE <= N_CTX, "Group block exceeds sequence length"
+    assert GROUP_START * HEAD_DIM + GROUP_SIZE * HEAD_DIM <= N_CTX * HEAD_DIM, "Group block exceeds tensor size"
+
     # initialize offsets
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
@@ -229,15 +265,21 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     qk_scale *= 1.44269504  # 1/log(2)
     # load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
+    # pdb.set_trace()
 
     # stage 1: off-band
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
     # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
     if STAGE & 1:
+        acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr_shared, V_block_ptr_shared,  #
+                                        start_m, qk_scale,  #
+                                        BLOCK_M, HEAD_DIM, BLOCK_N,  #
+                                        4 - STAGE, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5, 0, N_CTX_shared,  #
+                                        )
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        4 - STAGE, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5, group_start, group_end,  #
+                                        4 - STAGE, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5, GROUP_START, GROUP_END,  #
                                         )
     # stage 2: on-band
     if STAGE & 2:
@@ -246,7 +288,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,  #
                                         start_m, qk_scale,  #
                                         BLOCK_M, HEAD_DIM, BLOCK_N,  #
-                                        2, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5, group_start, group_end,  #
+                                        2, offs_m, offs_n, N_CTX, V.dtype.element_ty == tl.float8e5, GROUP_START, GROUP_END,  #
                                         )
     # epilogue
     m_i += tl.math.log2(l_i)
@@ -596,7 +638,7 @@ def _attn_bwd(Q, K, V, sm_scale,  #
 class _attention(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale, USE_TMA=True):
+    def forward(ctx, q, k, v, n_shared, n_seq, causal, sm_scale, num_groups, USE_TMA=True):
         # shape constraints
         HEAD_DIM_Q, HEAD_DIM_K = q.shape[-1], k.shape[-1]
         # when v is in float8_e5m2 it is transposed.
@@ -611,8 +653,8 @@ class _attention(torch.autograd.Function):
             waves_per_eu = 3 if HEAD_DIM_K <= 64 else 2
             extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
 
-        M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32) # Maximize value for each position 
-        if USE_TMA and supports_tma() and not (torch.cuda.get_device_capability()[0] == 9and q.dtype == torch.float8_e5m2):
+        M = torch.empty((q.shape[0], q.shape[1], n_seq), device=q.device, dtype=torch.float32) # Maximize value for each position 
+        if USE_TMA and supports_tma() and not (torch.cuda.get_device_capability()[0] == 9 and q.dtype == torch.float8_e5m2):
             # Note that on Hopper we cannot perform a FP8 dot with a non-transposed second tensor
             y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
@@ -636,7 +678,7 @@ class _attention(torch.autograd.Function):
                 STAGE=stage,  #
                 **extra_kern_args)
         else:
-            grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
+            grid = lambda args: (triton.cdiv(n_seq, args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
             ctx.grid = grid
             _attn_fwd[grid](
                 q, k, v, sm_scale, M, o,  #
@@ -645,17 +687,15 @@ class _attention(torch.autograd.Function):
                 v.stride(0), v.stride(1), v.stride(2), v.stride(3),  #
                 o.stride(0), o.stride(1), o.stride(2), o.stride(3),  #
                 q.shape[0], q.shape[1],  #
-                N_CTX=q.shape[2],  #
+                N_CTX_shared=n_shared,
+                N_CTX=n_seq,  #
                 HEAD_DIM=HEAD_DIM_K,  #
                 STAGE=stage,  #
-                GROUPS = 4,
-                num_warps=4,        
-                num_stages=3,       
-                BLOCK_M=32,         
-                BLOCK_N=32          
+                GROUPS=num_groups,
+                **extra_kern_args
             )
 
-        ctx.save_for_backward(q, k, v, o, M)
+        # ctx.save_for_backward(q, k, v, o, M)
         ctx.sm_scale = sm_scale
         ctx.HEAD_DIM = HEAD_DIM_K
         ctx.causal = causal

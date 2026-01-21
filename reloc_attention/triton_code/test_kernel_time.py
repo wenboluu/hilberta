@@ -5,10 +5,9 @@ from reloc_triton_kernel import attention
 import time
 import numpy as np
 
-
 # Disable Triton kernel cache to ensure recompile on each run
 os.environ["TRITON_DISABLE_CACHE"] = "1"
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # ========== Configuration ==========
 Z, H, N_CTX_shared, N_CTX, D_HEAD = 1, 24, 256, 4096, 128  # assume 64 is the global (e.g., text) tokens
@@ -37,6 +36,7 @@ triton_time_list = []
 for i in range(3000):
     start_time = time.time()
     out_triton = attention(q, k, v, N_CTX_shared, N_CTX, False, sm_scale, GROUPS, False)[:,:,N_CTX_shared:,:]
+    torch.cuda.synchronize()
     end_time = time.time()
     triton_time_list.append(end_time - start_time)
 
@@ -59,6 +59,7 @@ for j in range(3000):
         attn_mask=mask[None, None, :, :],
         dropout_p=0.0
     )[:,:,N_CTX_shared:,:]
+    torch.cuda.synchronize()
     end_time = time.time()
     torch_time_list.append(end_time - start_time)
 

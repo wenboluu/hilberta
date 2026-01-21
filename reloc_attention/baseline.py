@@ -1,11 +1,8 @@
-import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
-
 import argparse
 import numpy as np
 import itertools
 import os
-from diffusers import FluxPipeline
+from diffusers import StableDiffusionXLPipeline, StableDiffusionPipeline, FluxPipeline
 import torch
 import pandas as pd
 from tqdm import tqdm
@@ -42,24 +39,13 @@ def generate_image(
     )
     #********************************************************************************************************************
     flux_scheduler = FluxScheduler(
-        timesteps=28,
+        timesteps=35,
         dst_recompute_timesteps = recompute_step,
         attn_recompute_timesteps = recompute_step,
         merge_step = merge_step,
-        config_path="/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/transformer_layer_config.yaml",
+        config_path="/home/sz3684/diffusion/reorder_local_attention/triton_version/tomesd_global/transformer_layer_config.yaml",
     )
     #********************************************************************************************************************
-
-    apply_patch(
-        pipeline,
-        ratio=ratio,
-        dst_selection=dst_selection,
-        num_tiles=num_tiles,
-        merge_method=merge_method,
-        unet_scheduler=flux_scheduler,
-        toma_variant=toma_variant,
-        height=height,
-    )
 
     generator = torch.Generator(device=device).manual_seed(random_seed)
 
@@ -67,7 +53,7 @@ def generate_image(
     end_event = torch.cuda.Event(enable_timing=True)
     start_event.record()
 
-    stable_diffusion_output = pipeline.customized_call(
+    stable_diffusion_output = pipeline(
         prompt=prompt,
         height=height,
         width=width,
@@ -156,6 +142,7 @@ def evaluate_dst_selection(
         peak_memory = torch.cuda.max_memory_allocated()
         print(f"Current memory: {current_memory / 1048576:.2f}MiB, Peak memory: {peak_memory / 1048576:.2f}MiB")
 
+
         results.append(elapsed_time)
 
 if __name__ == "__main__":
@@ -166,8 +153,8 @@ if __name__ == "__main__":
     import shutil
     from pathlib import Path
 
-    if os.path.exists('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tensors/'):
-        shutil.rmtree('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tensors/')
+    if os.path.exists('/home/sz3684/diffusion/reorder_local_attention/triton_version/tensors/'):
+        shutil.rmtree('/home/sz3684/diffusion/reorder_local_attention/triton_version/tensors/')
 
     def load_config(config_path):
         """Load configuration from YAML file"""
@@ -182,7 +169,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config", 
         type=str,
-        default="/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml",
+        default="/home/sz3684/diffusion/reorder_local_attention/triton_version/tomesd_global/config.yaml",
         help="Path to configuration YAML file"
     )
     args = parser.parse_args()
@@ -199,7 +186,6 @@ if __name__ == "__main__":
     num_of_inference_steps = config['num_of_inference_steps']
     remark = config['remark']
     merge_step_interval = config['merge_step_interval']
-    output_folder = config['output_folder']
 
     recompute_step = [_ for _ in range(0, 35)]
     print('recompute_step', recompute_step)
@@ -221,9 +207,9 @@ if __name__ == "__main__":
         prompt_list = prompt_list
         seed_list = seed_list
         dst_method = dst_method
-        output_folder = output_folder
+        output_folder = f"/home/sz3684/diffusion/reorder_local_attention/triton_version/output/{toma_variant}/{ratio}"
         results_file_path = f"time.md"
-        device = "cuda:0"
+        device = "cuda:7"
 
         pipeline = FluxPipeline.from_pretrained(
             "black-forest-labs/FLUX.1-dev",
@@ -231,13 +217,6 @@ if __name__ == "__main__":
             cache_dir="/home/wl2707/.cache/huggingface/hub",
             local_files_only=True,
         ).to(device)
-
-        import types
-        from masking_utils import customized_forward, customized_call
-        pipeline.customized_call = types.MethodType(customized_call, pipeline)
-        pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
-
-        pipeline.load_lora_weights("/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/lora_weight/ckpt_2048_16/checkpoint-1200")
 
         evaluate_dst_selection(
             pipeline=pipeline,

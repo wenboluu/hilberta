@@ -104,19 +104,9 @@ def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.
 
 def apply_patch(
     model: torch.nn.Module,
-    ratio: float = 0.5,
-    max_downsample: int = 1,
     sx: int = 2,
     sy: int = 2,
-    use_rand: bool = True,
-    merge_attn: bool = True,
-    merge_crossattn: bool = False,
-    merge_mlp: bool = False,
-    dst_selection: str = "original",
     num_tiles: int = 16,
-    merge_method: str = "original",
-    unet_scheduler=None,
-    toma_variant=None,
     height=None,
 ):
     remove_patch(model)
@@ -128,7 +118,7 @@ def apply_patch(
     else:
         print("Model is not a supported model for ToMe patching.")
 
-    with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
+    with open('./config.yaml', 'r') as f:
         config = yaml.safe_load(f)
     num_of_tiles = config['num_tiles']
     sliding_cycle = config['sliding_cycle']
@@ -145,19 +135,6 @@ def apply_patch(
         transformer_model._tome_info = {
             "size": None,
             "args": {
-                "ratio": ratio,
-                "max_downsample": max_downsample,
-                "sx": sx,
-                "sy": sy,
-                "use_rand": use_rand,
-                "generator": None,
-                "merge_attn": merge_attn,
-                "merge_crossattn": merge_crossattn,
-                "merge_mlp": merge_mlp,
-                "dst_selection": dst_selection,
-                "k":  num_tiles * 4,
-                "merge_method": merge_method,
-                "unet_scheduler": unet_scheduler,
                 "offset": (image_size//num_of_tiles)//sliding_cycle * i,
             },
         }

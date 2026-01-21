@@ -1,0 +1,10 @@
+# config.yaml
+num_tiles: 4
+sliding_cycle: 4
+prompt_list: [ "lion" ]
+seed_list: [42, 43, 44, 45, 46, 47, 48, 49, 50]
+num_of_inference_steps: 28
+remark: "New_RoPE"
+output_folder: "./output/lora_1024_4"
+full_attn_step: [1,2]
+full_attn_layer: [1,3]

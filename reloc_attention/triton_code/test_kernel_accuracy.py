@@ -1,7 +1,7 @@
 import os
 import torch
 import torch.nn.functional as F
-from reloc_triton_kernel import attention
+from reloc_triton_kernel_bf16 import attention
 
 os.environ["TRITON_DISABLE_CACHE"] = "1"
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"
@@ -11,7 +11,7 @@ GROUPS = 4
 assert N_CTX % GROUPS == 0
 group_size = N_CTX // GROUPS
 
-dtype = torch.float16
+dtype = torch.bfloat16
 device = torch.device("cuda:0")
 
 # ========== Construct random input ==========
@@ -21,13 +21,6 @@ k = torch.randn(Z, H, N_CTX_shared + N_CTX, D_HEAD, device=device, dtype=dtype)
 v = torch.randn(Z, H, N_CTX_shared + N_CTX, D_HEAD, device=device, dtype=dtype)
 
 assert q.is_cuda and k.is_cuda and v.is_cuda
-# v[...] = 0.05
-
-# use arange for q k v for debugging
-# q = torch.arange(0, (N_CTX_shared + N_CTX) * D_HEAD, device=device, dtype=dtype).reshape(Z, H, N_CTX_shared + N_CTX, D_HEAD)
-# k = torch.arange(0, (N_CTX_shared + N_CTX) * D_HEAD, device=device, dtype=dtype).reshape(Z, H, N_CTX_shared + N_CTX, D_HEAD)
-# v = torch.arange(0, (N_CTX_shared + N_CTX) * D_HEAD, device=device, dtype=dtype).reshape(Z, H, N_CTX_shared + N_CTX, D_HEAD)
-
 sm_scale = 1.0 / (D_HEAD ** 0.5)
 
 # ========== Triton implementation ==========
@@ -51,15 +44,9 @@ attn_scores = torch.matmul(q, k.transpose(-2, -1)) * sm_scale  # [Z, H, N_CTX, N
 # 4) Mask out scores across different groups
 attn_scores = attn_scores.masked_fill(mask[None, None, :, :], float('-inf'))
 
-print(out_triton)
-print("triton shape", out_triton.shape)
-print(attn_scores)
-
 # 5) Softmax and weighted sum
 attn_probs = F.softmax(attn_scores, dim=-1)  # [Z, H, N_CTX, N_CTX]
 out_ref = torch.matmul(attn_probs, v)[:,:,N_CTX_shared:,:]        # [Z, H, N_CTX, D_HEAD]
-print(out_ref)
-print("ref shape", out_ref.shape)
 
 # import pdb; pdb.set_trace()
 

@@ -1,18 +1,3 @@
-"""
-Fused Attention
-===============
-
-This is a Triton implementation of the Flash Attention v2 algorithm from Tri Dao (https://tridao.me/publications/flash2/flash2.pdf)
-
-Credits: OpenAI kernel team
-
-Extra Credits:
-
-* Original flash attention paper (https://arxiv.org/abs/2205.14135)
-* Rabe and Staats (https://arxiv.org/pdf/2112.05682v2.pdf)
-
-"""
-
 import pytest
 import torch
 
@@ -81,10 +66,11 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         acc = acc * alpha[:, None]
         # update acc
         v = tl.load(V_block_ptr)
-        if fp8_v:
-            p = p.to(tl.float8e5)
-        else:
-            p = p.to(tl.float16)
+        # if fp8_v:
+        #     p = p.to(tl.float8e5)
+        # else:
+        #     p = p.to(tl.float16)
+        p = p.to(v.dtype)
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
         m_i = m_ij
@@ -173,9 +159,7 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               HEAD_DIM: tl.constexpr,  #
               BLOCK_M: tl.constexpr,  #
               BLOCK_N: tl.constexpr,  #
-              STAGE: tl.constexpr,  #
-              GROUPS: tl.constexpr,  #
-              GROUP_SIZE: tl.constexpr  #
+              STAGE: tl.constexpr  #
               ):
     tl.static_assert(BLOCK_N <= HEAD_DIM)
     start_m = tl.program_id(0)
@@ -184,10 +168,6 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     off_h = off_hz % H
     qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
 
-    GROUP_IDX = start_m // GROUP_SIZE
-    GROUP_START = GROUP_IDX * GROUP_SIZE
-    GROUP_END = GROUP_START + GROUP_SIZE
-    
     # block pointers
     Q_block_ptr = tl.make_block_ptr(
         base=Q + qvk_offset,
@@ -615,8 +595,9 @@ class _attention(torch.autograd.Function):
             waves_per_eu = 3 if HEAD_DIM_K <= 64 else 2
             extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
 
-        M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32) # Maximize value for each position 
-        if USE_TMA and supports_tma() and not (torch.cuda.get_device_capability()[0] == 9and q.dtype == torch.float8_e5m2):
+        M = torch.empty((q.shape[0], q.shape[1], q.shape[2]), device=q.device, dtype=torch.float32)
+        if USE_TMA and supports_tma() and not (torch.cuda.get_device_capability()[0] == 9
+                                               and q.dtype == torch.float8_e5m2):
             # Note that on Hopper we cannot perform a FP8 dot with a non-transposed second tensor
             y_dim = q.shape[0] * q.shape[1] * q.shape[2]
 
@@ -640,11 +621,7 @@ class _attention(torch.autograd.Function):
                 STAGE=stage,  #
                 **extra_kern_args)
         else:
-            GROUPS = 4
-            N_CTX = q.shape[2]
-            GROUP_SIZE = N_CTX // GROUPS
-
-            grid = lambda args: (triton.cdiv(GROUP_SIZE, args["BLOCK_M"]) * GROUPS, q.shape[0] * q.shape[1], 1)
+            grid = lambda args: (triton.cdiv(q.shape[2], args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
             ctx.grid = grid
             _attn_fwd[grid](
                 q, k, v, sm_scale, M, o,  #
@@ -656,8 +633,6 @@ class _attention(torch.autograd.Function):
                 N_CTX=q.shape[2],  #
                 HEAD_DIM=HEAD_DIM_K,  #
                 STAGE=stage,  #
-                GROUPS = GROUPS,
-                GROUP_SIZE = GROUP_SIZE,
                 **extra_kern_args)
 
         ctx.save_for_backward(q, k, v, o, M)

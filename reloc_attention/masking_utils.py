@@ -18,7 +18,6 @@ import inspect
 
 logger = logging.get_logger(__name__)
 
-
 def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
     if x.shape[1] == 4096:
         hilbert_index = get_hilbert_flat_indices(6).to(x.device)
@@ -159,7 +158,7 @@ def customized_forward(
                     "Passing `scale` via `joint_attention_kwargs` when not using the PEFT backend is ineffective."
                 )
         hidden_states = self.x_embedder(hidden_states)
-        
+
         timestep = timestep.to(hidden_states.dtype) * 1000
         if guidance is not None:
             guidance = guidance.to(hidden_states.dtype) * 1000
@@ -188,24 +187,6 @@ def customized_forward(
         ids = torch.cat((txt_ids, img_ids), dim=0)
         image_rotary_emb = self.pos_embed(ids)
 
-        # # load config 
-        # with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
-        #     config = yaml.safe_load(f)
-        # num_of_tiles = config['num_tiles']
-        # sliding_cycle = config['sliding_cycle']
-
-        # offset_list = [((hidden_states.shape[1]//num_of_tiles) //sliding_cycle) * i for i in range(sliding_cycle)]
-
-        # os.makedirs('./mask', exist_ok=True)
-
-        # for offset in offset_list:
-        #     mask = create_hilbert_tile_mask(hidden_states, num_of_tiles=num_of_tiles, offset=offset)
-        #     with open(f'./mask/mask_offset_{offset}_num_of_tiles_{num_of_tiles}.pt', 'wb') as f:
-        #         torch.save(mask, f)
-
-        # os._exit(0)
-
-
         for index_block, block in enumerate(self.transformer_blocks):
             if self.training and self.gradient_checkpointing:
 
@@ -227,7 +208,6 @@ def customized_forward(
                     image_rotary_emb,
                     **ckpt_kwargs,
                 )
-
             else:
                 encoder_hidden_states, hidden_states = block(
                     hidden_states=hidden_states,

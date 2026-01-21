@@ -9,7 +9,7 @@ import itertools
 if __name__ == "__main__":
     os.makedirs('./mask_list', exist_ok=True)
 
-    with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
+    with open('./config.yaml', 'r') as f:
         config = yaml.safe_load(f)
     num_of_tiles = config['num_tiles']
     sliding_cycle = config['sliding_cycle']
