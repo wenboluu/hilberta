@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 import argparse
 import numpy as np
@@ -146,8 +146,8 @@ def evaluate_dst_selection(
             random_seed=seed,
             dst_selection=dst_selection,
             max_downsample=4,
-            height=1024,
-            width=1024,
+            height=2048,
+            width=2048,
             num_tiles=num_tiles,
             merge_method=merge_method,
             toma_variant=toma_variant,
@@ -237,7 +237,7 @@ if __name__ == "__main__":
         pipeline.customized_call = types.MethodType(customized_call, pipeline)
         pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
 
-        pipeline.load_lora_weights("/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/lora_weight/ckpt_1024_16/checkpoint-2817")
+        pipeline.load_lora_weights("/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/lora_weight/ckpt_2048_16/checkpoint-1200")
 
         evaluate_dst_selection(
             pipeline=pipeline,

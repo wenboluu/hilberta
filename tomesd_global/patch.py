@@ -137,6 +137,8 @@ def apply_patch(
         image_size = 4096
     elif height == 2048:
         image_size = 16384
+    else:
+        raise ValueError(f"height must be 1024 or 2048, but got {height}")
 
     info_list = []
     for i in range(sliding_cycle):

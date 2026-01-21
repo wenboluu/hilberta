@@ -3,23 +3,24 @@ import torch
 import torch.nn.functional as F
 from reloc_triton_kernel import attention
 
-# Disable Triton kernel cache to ensure recompile on each run
 os.environ["TRITON_DISABLE_CACHE"] = "1"
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 # ========== Configuration ==========
-Z, H, N_CTX_shared, N_CTX, D_HEAD = 1, 24, 16, 1024, 128  # assume 64 is the global (e.g., text) tokens
+Z, H, N_CTX_shared, N_CTX, D_HEAD = 1, 24, 256, 4096, 128  # assume 64 is the global (e.g., text) tokens
 GROUPS = 4
 assert N_CTX % GROUPS == 0
 group_size = N_CTX // GROUPS
 
 dtype = torch.float16
-device = torch.device("cuda")
+device = torch.device("cuda:0")
 
 # ========== Construct random input ==========
 torch.manual_seed(0)
 q = torch.randn(Z, H, N_CTX_shared + N_CTX, D_HEAD, device=device, dtype=dtype)
 k = torch.randn(Z, H, N_CTX_shared + N_CTX, D_HEAD, device=device, dtype=dtype)
 v = torch.randn(Z, H, N_CTX_shared + N_CTX, D_HEAD, device=device, dtype=dtype)
+
+assert q.is_cuda and k.is_cuda and v.is_cuda
 # v[...] = 0.05
 
 # use arange for q k v for debugging

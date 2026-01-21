@@ -153,7 +153,7 @@ def keep(conf):
     return True
 
 
-# @triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
+@triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
 @triton.jit
 def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               stride_qz, stride_qh, stride_qm, stride_qk,  #
@@ -676,8 +676,7 @@ class _attention(torch.autograd.Function):
                 HEAD_DIM=HEAD_DIM_K,  #
                 STAGE=stage,  #
                 GROUPS=num_groups,
-                BLOCK_M=16, # change to other appropriate values, use 8 for debugging, 8 does not work for non-debugging mode
-                BLOCK_N=16, # change to other appropriate values
+                **extra_kern_args
             )
 
         # ctx.save_for_backward(q, k, v, o, M)

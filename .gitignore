@@ -3,7 +3,6 @@ tomesd_global_backup/
 tensors/
 flux_todo/
 output/
-tomesd_global/__pycache__/
 
 # Ignore everything inside the directory, including hidden files
 tomesd_global_backup/**/*
@@ -11,6 +10,10 @@ output/**/*
 flux_todo/**/*
 mask/
 mask_list/
-tomesd_global/__pycache__/
-inference_pipeline/tomesd_global/__pycache__/
+
+# Ignore all Python cache directories
+**/__pycache__/
+*.py[cod]
+*$py.class
+
 lora_weight/
