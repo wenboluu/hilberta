@@ -3,7 +3,7 @@ ratio_list: [ 0 ]
 num_tiles: 4
 sliding_cycle: 4
 prompt_list: [ "lion" ]
-seed_list: [ 42, 43, 44, 45, 46, 47, 48, 49, 50 ]
+seed_list: [ 42 ]
 num_of_inference_steps: 28
 remark: "New_RoPE"
 merge_step_interval: 3
