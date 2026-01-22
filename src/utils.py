@@ -1,9 +1,11 @@
+import gc
+import os
+from typing import Tuple, Union
+
 import torch
 import torch.nn.functional as F
-import os
-from typing import Union, Tuple
 from hilbertcurve.hilbertcurve import HilbertCurve
-import gc
+
 
 def isinstance_str(x: object, cls_name: str):
     """
@@ -33,6 +35,7 @@ def init_generator(device: torch.device, fallback: torch.Generator = None):
             return init_generator(torch.device("cpu"))
         else:
             return fallback
+
 
 def do_nothing(x: torch.Tensor, mode: str = None):
     return x
@@ -80,12 +83,11 @@ def apply_rotary_emb(
             x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)
         out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
         return out
-    
 
 
 def save_tensor_every_k_steps(tensor: torch.Tensor, prefix: str, output_dir: str, step: int):
     os.makedirs(output_dir, exist_ok=True)
-    
+
     existing_files = [f for f in os.listdir(output_dir)
                       if os.path.isfile(os.path.join(output_dir, f))]
     file_count = len(existing_files)
@@ -121,6 +123,7 @@ def fold_with_indices(x, num_tiles):
 
     return tile_x, flatten_tile_idx
 
+
 def unfold_with_indices(x_prime, flatten_tile_idx):
     B, N, C = flatten_tile_idx.shape
 
@@ -132,21 +135,22 @@ def unfold_with_indices(x_prime, flatten_tile_idx):
 
     return restored_x
 
+
 def reconstruct_new_rope_emb(A, rope_emb, average_method='weighted'):
     """
     Reconstruct a new rotary embedding (rope) for destination tokens using the provided tensors.
-    
+
     Parameters:
       - A: torch.Tensor of shape [1, k, d, n]
            Attention tensor from which top-3 indices are selected.
       - rope_emb: torch.Tensor of shape [2, k, n, c]
-           Rotary embedding tensor, where channel 0 contains cosine values and 
+           Rotary embedding tensor, where channel 0 contains cosine values and
            channel 1 contains sine values.
       - average_method: str, either 'weighted' or 'direct'
            Averaging method:
              'weighted' -> Use normalized top-3 attention weights.
              'direct'   -> Simple average.
-    
+
     Returns:
       - new_rope_emb: torch.Tensor of shape [2, k, d, c]
            The reconstructed rope embedding for each destination token group (d).
@@ -156,77 +160,78 @@ def reconstruct_new_rope_emb(A, rope_emb, average_method='weighted'):
     _, k, d, n = A.shape
     _, k2, n2, c = rope_emb.shape
     assert k == k2 and n == n2, "Dimension mismatch between A and rope_emb."
-    
+
     # Step 1: Extract the top-3 indices along the n dimension from A.
     # The resulting tensors have shape [1, k, d, 3].
     topk_values, topk_indices = torch.topk(A, k=3, dim=-1)
-    
+
     # Remove the batch dimension -> shape becomes [k, d, 3]
     topk_values = topk_values.squeeze(0)
     topk_indices = topk_indices.squeeze(0)
-    
+
     # Step 2: Gather the corresponding rope embeddings.
     # Split rope_emb into cosine and sine parts.
     # Each part has shape [k, n, c].
     rope_emb_cos = rope_emb[0]  # shape: [k, n, c]
     rope_emb_sin = rope_emb[1]  # shape: [k, n, c]
-    
+
     # To gather along the n dimension using an index of shape [k, d, 3],
     # we unsqueeze each part along a new dimension so that they become [k, 1, n, c].
     rope_emb_cos_unsq = rope_emb_cos.unsqueeze(1).repeat(1, d, 1, 1)  # [k, 1, n, c]
     rope_emb_sin_unsq = rope_emb_sin.unsqueeze(1).repeat(1, d, 1, 1)  # [k, 1, n, c]
-    
+
     # Prepare an index tensor for gathering:
     # topk_indices has shape [k, d, 3]. We add an extra dimension at the end to match the embedding dim:
     # New index shape: [k, d, 3, c]
     index_for_gather = topk_indices.unsqueeze(-1).expand(-1, -1, -1, c)
-    
+
     # Gather along the n dimension (dim=2) using the prepared index.
     # The resulting gathered tensors will have shape [k, d, 3, c].
     gathered_cos = torch.gather(rope_emb_cos_unsq, dim=2, index=index_for_gather)
     gathered_sin = torch.gather(rope_emb_sin_unsq, dim=2, index=index_for_gather)
-    
+
     # Combine cosine and sine into one tensor with shape [2, k, d, 3, c].
     gathered = torch.stack([gathered_cos, gathered_sin], dim=0)
-    
+
     # Step 3: Compute angles at the gathered positions.
     # Using torch.atan2(sine, cosine) yields a tensor of angles with shape [k, d, 3, c].
     gathered_angles = torch.atan2(gathered[1], gathered[0])
-    
+
     # Step 4: Average the angles over the top-3 dimension, preserving the d dimension.
     if average_method == 'weighted':
         # Weighted average:
         # Normalize the top-3 attention weights along the top-3 dimension.
         weights_norm = topk_values / topk_values.sum(dim=-1, keepdim=True)  # shape: [k, d, 3]
-        
+
         # For proper angle averaging, average cosine and sine separately.
         cos_angles = torch.cos(gathered_angles)  # shape: [k, d, 3, c]
         sin_angles = torch.sin(gathered_angles)  # shape: [k, d, 3, c]
-        
+
         # Multiply the cosine and sine with the normalized weights.
         # Note: weights_norm.unsqueeze(-1) expands weights to shape [k, d, 3, 1] for broadcasting.
         weighted_avg_cos = (weights_norm.unsqueeze(-1) * cos_angles).sum(dim=2)  # sum over the top-3 dim -> [k, d, c]
         weighted_avg_sin = (weights_norm.unsqueeze(-1) * sin_angles).sum(dim=2)  # -> [k, d, c]
-        
+
         # Compute the averaged angle from the weighted average cosine and sine.
         avg_angle = torch.atan2(weighted_avg_sin, weighted_avg_cos)  # shape: [k, d, c]
-    
+
     elif average_method == 'direct':
         # Direct average:
         # Simply average the cosine and sine over the top-3 dimension.
         avg_cos = torch.cos(gathered_angles).mean(dim=2)  # shape: [k, d, c]
         avg_sin = torch.sin(gathered_angles).mean(dim=2)  # shape: [k, d, c]
-        
+
         # Compute the averaged angle.
         avg_angle = torch.atan2(avg_sin, avg_cos)  # shape: [k, d, c]
     else:
         raise ValueError("average_method must be either 'weighted' or 'direct'")
-    
+
     new_rope_emb = torch.stack([torch.cos(avg_angle), torch.sin(avg_angle)], dim=0)
-    
+
     return new_rope_emb
 
-def index_shift_for_tile_sliding(x, tile_len, flag = None):
+
+def index_shift_for_tile_sliding(x, tile_len, flag=None):
     B, N, C = x.shape
     if N ** 0.5 != int(N ** 0.5):
         H = 64
@@ -276,11 +281,9 @@ def get_hilbert_flat_indices(p: int) -> torch.Tensor:
 
     return torch.tensor(indices, dtype=torch.long)
 
+
 def get_inverse_hilbert_indices(p: int) -> torch.Tensor:
     hilbert = get_hilbert_flat_indices(p)
     inverse = torch.empty_like(hilbert)
     inverse[hilbert] = torch.arange(hilbert.numel(), device=hilbert.device)
     return inverse
-
-
-

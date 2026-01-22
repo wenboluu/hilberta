@@ -16,9 +16,9 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from utils import isinstance_str, init_generator, apply_rotary_emb
-# Load mask files from mask_list directory
-mask_dir = '/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/mask_list'
+from .utils import isinstance_str, init_generator, apply_rotary_emb
+# Load mask files from masks directory
+mask_dir = './masks'
 
 # Load 4096 masks with 4 tiles
 mask_4096_0_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
@@ -33,7 +33,7 @@ mask_4096_128_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_128
 mask_4096_192_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_192_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
 
 # Create mask dictionary
-mask_list = {
+masks = {
     # 4096 masks with 4 tiles
     '4096_0_4': mask_4096_0_4,
     '4096_256_4': mask_4096_256_4,
@@ -859,13 +859,13 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
             value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
 
         if image_rotary_emb is not None:
-            from utils import apply_rotary_emb
+            from .utils import apply_rotary_emb
 
             query = apply_rotary_emb(query, image_rotary_emb)
             key = apply_rotary_emb(key, image_rotary_emb)
 
         import yaml
-        with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
+        with open('./src/config.yaml', 'r') as f:
             config = yaml.safe_load(f)
         num_of_tiles = config['num_tiles']
         full_attn_step = config['full_attn_step']
@@ -880,7 +880,7 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
 
         attn_mask = torch.zeros(L, S, dtype=query.dtype, device=query.device)
         if step not in full_attn_step and layer_idx not in full_attn_layer:
-            mask = mask_list[f'{image_size}_{offset}_{num_of_tiles}'].to(query.device)
+            mask = masks[f'{image_size}_{offset}_{num_of_tiles}'].to(query.device)
             attn_mask[-image_size:, -image_size:] = attn_mask[-image_size:, -image_size:] + mask
 
         hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)

@@ -1,8 +1,12 @@
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+
 import torch
-from typing import Type, Dict, Any, Tuple, Callable, Optional, Union, List
-from utils import isinstance_str, init_generator
-from customized_attention_processor import FluxAttnProcessor2_0_for_transformerblock_global
 import yaml
+
+from .customized_attention_processor import \
+    FluxAttnProcessor2_0_for_transformerblock_global
+from .utils import init_generator, isinstance_str
+
 
 def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
     class ToMeBlock(block_class):
@@ -15,7 +19,7 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
             temb: torch.FloatTensor,
             image_rotary_emb=None,
             joint_attention_kwargs=None,
-            layer_idx = None,
+            layer_idx=None,
             step: Optional[int] = None,
         ):
             norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
@@ -30,8 +34,8 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
                 hidden_states=norm_hidden_states,
                 encoder_hidden_states=norm_encoder_hidden_states,
                 image_rotary_emb=image_rotary_emb,
-                layer_idx = layer_idx,
-                step = step,
+                layer_idx=layer_idx,
+                step=step,
                 **joint_attention_kwargs,
             )
 
@@ -75,7 +79,7 @@ def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.
             temb: torch.FloatTensor,
             image_rotary_emb=None,
             joint_attention_kwargs=None,
-            layer_idx = None,
+            layer_idx=None,
             step: Optional[int] = None,
         ):
             residual = hidden_states
@@ -85,8 +89,8 @@ def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.
             attn_output = self.attn(
                 hidden_states=norm_hidden_states,
                 image_rotary_emb=image_rotary_emb,
-                layer_idx = layer_idx,
-                step = step,
+                layer_idx=layer_idx,
+                step=step,
                 **joint_attention_kwargs,
             )
 
@@ -101,6 +105,7 @@ def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.
             return hidden_states
 
     return ToMeBlock
+
 
 def apply_patch(
     model: torch.nn.Module,
@@ -128,7 +133,7 @@ def apply_patch(
     else:
         print("Model is not a supported model for ToMe patching.")
 
-    with open('/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml', 'r') as f:
+    with open('./src/config.yaml', 'r') as f:
         config = yaml.safe_load(f)
     num_of_tiles = config['num_tiles']
     sliding_cycle = config['sliding_cycle']
@@ -153,19 +158,18 @@ def apply_patch(
                 "merge_crossattn": merge_crossattn,
                 "merge_mlp": merge_mlp,
                 "dst_selection": dst_selection,
-                "k":  num_tiles * 4,
+                "k": num_tiles * 4,
                 "merge_method": merge_method,
                 "unet_scheduler": unet_scheduler,
-                "offset": (image_size//num_of_tiles)//sliding_cycle * i,
+                "offset": (image_size // num_of_tiles) // sliding_cycle * i,
             },
         }
         info_list.append(transformer_model._tome_info)
-    
 
     make_tome_block_fn = make_diffusers_flux_tome_block
     make_single_tome_block_fn = make_flux_single_block
 
-    counter = 0 
+    counter = 0
     for _, module in transformer_model.named_modules():
         if isinstance_str(module, "FluxTransformerBlock"):
             module.__class__ = make_tome_block_fn(module.__class__)
@@ -182,6 +186,7 @@ def apply_patch(
             module.attn.processor._tome_info = info_list[info_counter]
             counter += 1
     return model
+
 
 def remove_patch(model: torch.nn.Module):
     """Removes a patch from a ToMe Diffusion module if it was already patched."""
