@@ -84,14 +84,14 @@ if __name__ == "__main__":
     pipeline = FluxPipeline.from_pretrained(
         "black-forest-labs/FLUX.1-dev",
         torch_dtype=torch.bfloat16,
-        cache_dir="/home/wl2707/.cache/huggingface/hub",
+        cache_dir="/scratch/wl2707/.cache",
         local_files_only=True,
     ).to(device)
 
     pipeline.customized_call = types.MethodType(customized_call, pipeline)
     pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
 
-    pipeline.load_lora_weights("./lora_weight/ckpt_1024_16/checkpoint-2817")
+    pipeline.load_lora_weights("./lora_weights/ckpt_1024_16/checkpoint-2817")
 
     pipeline.set_progress_bar_config(disable=True)
 

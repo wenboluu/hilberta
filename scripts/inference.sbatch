@@ -20,7 +20,7 @@ export PYTHONPATH=/scratch/wl2707/research/hilbert_attention/hilbert_env:$PYTHON
 conda init bash
 
 # Go to the working directory
-cd /home/wl2707/Projects/reorder_local_attention
+cd /scratch/wl2707/research/hilbert_attention/reorder_local_attention
 
 # Ensure partition index is passed as an argument
 if [ -z "$1" ]; then
