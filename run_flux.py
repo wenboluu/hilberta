@@ -70,12 +70,13 @@ if __name__ == "__main__":
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
 
-    # prompt = config['prompt_list'][0]
+    image_size = config['image_size']
     seed = config['seed_list'][0]
     num_tiles = config['num_tiles']
     num_of_inference_steps = config['num_of_inference_steps']
     merge_step_interval = config['merge_step_interval']
-    output_folder = config['output_folder']
+    output_folder = f"./outputs/lora_{image_size}_{num_tiles}"
+    ckpt_path = config['ckpt_path']
     device = "cuda:0"
 
     recompute_step = list(range(0, num_of_inference_steps))
@@ -91,7 +92,7 @@ if __name__ == "__main__":
     pipeline.customized_call = types.MethodType(customized_call, pipeline)
     pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
 
-    pipeline.load_lora_weights("./lora_weights/ckpt_1024_16/checkpoint-2817")
+    pipeline.load_lora_weights(ckpt_path)
 
     pipeline.set_progress_bar_config(disable=True)
 
@@ -107,17 +108,15 @@ if __name__ == "__main__":
     end_idx = start_idx + partition_size if args.partition < total_partitions - 1 else len(prompts)
     prompts_partition = prompts[start_idx:end_idx]  # Select the prompts for the given partition
 
-    image_sizes = [(1024, 1024)]
-    for height, width in image_sizes:
-        for prompt_idx, prompt in enumerate(prompts_partition, start=start_idx):  # Keep track of global prompt index
-            generate_image(
-                pipeline=pipeline,
-                output_folder=output_folder,
-                prompt=prompt,
-                prompt_idx=prompt_idx,  # Pass prompt index
-                seed=seed,
-                height=height,
-                width=width,
-                num_tiles=num_tiles,
-                num_of_inference_steps=num_of_inference_steps,
-            )
+    for prompt_idx, prompt in enumerate(prompts_partition, start=start_idx):  # Keep track of global prompt index
+        generate_image(
+            pipeline=pipeline,
+            output_folder=output_folder,
+            prompt=prompt,
+            prompt_idx=prompt_idx,  # Pass prompt index
+            seed=seed,
+            height=image_size,
+            width=image_size,
+            num_tiles=num_tiles,
+            num_of_inference_steps=num_of_inference_steps,
+        )

@@ -1,51 +1,49 @@
 import os
-import math
 import inspect
 from typing import (
-    Callable, 
-    List, 
-    Optional, 
-    Tuple, 
-    Union, 
-    Type, 
-    Dict, 
-    Any
+    Callable,
+    Optional,
 )
 
 import torch
 import torch.nn.functional as F
 from torch import nn
+import yaml
 
-from .utils import isinstance_str, init_generator, apply_rotary_emb
-# Load mask files from masks directory
+
 mask_dir = './masks'
 
-# Load 4096 masks with 4 tiles
-mask_4096_0_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-mask_4096_256_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_256_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-mask_4096_512_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_512_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-mask_4096_768_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_768_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+with open('./src/config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+    image_size = config['image_size']
+    num_tiles = config['num_tiles']
 
-# Load 4096 masks with 16 tiles
-mask_4096_0_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-mask_4096_64_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_64_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-mask_4096_128_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_128_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-mask_4096_192_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_192_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+seq_len = (image_size // 16) * (image_size // 16)
 
-# Create mask dictionary
-masks = {
-    # 4096 masks with 4 tiles
-    '4096_0_4': mask_4096_0_4,
-    '4096_256_4': mask_4096_256_4,
-    '4096_512_4': mask_4096_512_4,
-    '4096_768_4': mask_4096_768_4,
-    
-    # 4096 masks with 16 tiles
-    '4096_0_16': mask_4096_0_16,
-    '4096_64_16': mask_4096_64_16,
-    '4096_128_16': mask_4096_128_16,
-    '4096_192_16': mask_4096_192_16,
-}
+masks = {}
+
+# Function to calculate offsets for each configuration
+
+
+def get_offsets(image_size, num_tiles, sliding_cycle=4):
+    base_offset = image_size // num_tiles // sliding_cycle
+    return [i * base_offset for i in range(sliding_cycle)]
+
+
+for offset in get_offsets(seq_len, num_tiles):
+    mask_file = f'image_size_{seq_len}_offset_{offset}_num_of_tiles_{num_tiles}.pt'
+    mask_path = os.path.join(mask_dir, mask_file)
+
+    key = f'{seq_len}_{offset}_{num_tiles}'
+
+    try:
+        masks[key] = torch.load(mask_path, map_location=torch.device('cuda:0'))
+        print(f"Loaded mask: {mask_file}")
+    except FileNotFoundError:
+        print(f"Warning: Mask file {mask_file} not found. Skipping.")
+
+print(f"Loaded {len(masks)} masks in total.")
+
 
 class Attention(nn.Module):
     r"""
@@ -324,7 +322,8 @@ class Attention(nn.Module):
         if use_memory_efficient_attention_xformers:
             if is_added_kv_processor and is_custom_diffusion:
                 raise NotImplementedError(
-                    f"Memory efficient attention is currently not supported for custom diffusion for attention processor type {self.processor}"
+                    f"Memory efficient attention is currently not supported for custom diffusion for attention processor type {
+                        self.processor}"
                 )
             if not is_xformers_available():
                 raise ModuleNotFoundError(
@@ -497,7 +496,8 @@ class Attention(nn.Module):
         ]
         if len(unused_kwargs) > 0:
             logger.warning(
-                f"cross_attention_kwargs {unused_kwargs} are not expected by {self.processor.__class__.__name__} and will be ignored."
+                f"cross_attention_kwargs {unused_kwargs} are not expected by {
+                    self.processor.__class__.__name__} and will be ignored."
             )
         cross_attention_kwargs = {k: w for k, w in cross_attention_kwargs.items() if k in attn_parameters}
 
@@ -725,6 +725,7 @@ class Attention(nn.Module):
 
         self.fused_projections = fuse
 
+
 class AttnProcessor:
     r"""
     Default processor for performing attention-related computations.
@@ -796,6 +797,7 @@ class AttnProcessor:
 
         return hidden_states
 
+
 class FluxAttnProcessor2_0_for_transformerblock_global:
     """Attention processor used typically in processing the SD3-like self-attention projections."""
 
@@ -810,8 +812,8 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
         encoder_hidden_states: torch.FloatTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         image_rotary_emb: Optional[torch.Tensor] = None,
-        step = None,
-        layer_idx = None,
+        step=None,
+        layer_idx=None,
     ) -> torch.FloatTensor:
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
         # `sample` projections.
@@ -883,14 +885,15 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
             mask = masks[f'{image_size}_{offset}_{num_of_tiles}'].to(query.device)
             attn_mask[-image_size:, -image_size:] = attn_mask[-image_size:, -image_size:] + mask
 
-        hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)
+        hidden_states = F.scaled_dot_product_attention(
+            query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
 
         if encoder_hidden_states is not None:
             encoder_hidden_states, hidden_states = (
                 hidden_states[:, : encoder_hidden_states.shape[1]],
-                hidden_states[:, encoder_hidden_states.shape[1] :],
+                hidden_states[:, encoder_hidden_states.shape[1]:],
             )
 
             # linear proj
@@ -901,5 +904,3 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
             return hidden_states, encoder_hidden_states
         else:
             return hidden_states
-        
-

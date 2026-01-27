@@ -14,7 +14,7 @@ if __name__ == "__main__":
     with open('./src/config.yaml', 'r') as f:
         config = yaml.safe_load(f)
 
-    image_size_list = [4096]
+    image_size_list = [4096, 16384]
     num_of_tiles_list = [4, 16]
     sliding_cycle_list = [2, 4]
 
