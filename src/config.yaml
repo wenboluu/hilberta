@@ -1,5 +1,5 @@
 # config.yaml
-num_tiles: 4
+num_tiles: 16
 sliding_cycle: 4
 
 merge_step_interval: 3
@@ -10,5 +10,5 @@ image_size: 2048
 num_of_inference_steps: 28
 seed_list: [ 42 ]
 
-output_folder: "./outputs/lora_2048_4"
-ckpt_path: "./lora_weights/ckpt_1024_16/checkpoint-2817"
+# ckpt_path: "./lora_weights/ckpt_1024_16/checkpoint-2817"
+ckpt_path: "./lora_weights/ckpt_2048_16/checkpoint-2504"

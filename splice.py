@@ -10,16 +10,19 @@ parser.add_argument('--dir', type=str, default='./outputs/lora_1024_4', help='Di
 parser.add_argument('--dim', type=str, required=True, help='mxn, e.g., 3x3, Grid dimension')
 args = parser.parse_args()
 
-grid_w, grid_h = map(int, args.dim.split('x'))
+grid_h, grid_w = map(int, args.dim.split('x'))
 png_dir = args.dir
 total_required = grid_w * grid_h
 
 # === Collect PNG files ===
-png_files = glob.glob(os.path.join(png_dir, "*.png"))
-if len(png_files) < total_required:
-    raise ValueError(f"Not enough PNG files in {png_dir}. Required: {total_required}, Found: {len(png_files)}")
+image_files = []
+for ext in ("*.png", "*.jpg", "*.jpeg"):
+    image_files.extend(glob.glob(os.path.join(png_dir, ext)))
 
-selected_files = random.sample(png_files, total_required)
+if len(image_files) < total_required:
+    raise ValueError(f"Not enough image files in {png_dir}. Required: {total_required}, Found: {len(image_files)}")
+
+selected_files = random.sample(image_files, total_required)
 
 # === Load and resize images ===
 images = []
@@ -44,6 +47,6 @@ for idx, img in enumerate(images):
     grid_img.paste(img, (x, y))
 
 # === Save ===
-output_path = os.path.join(os.getcwd(), f"random_grid_{grid_w}x{grid_h}.jpg")
+output_path = os.path.join(os.getcwd(), f"random_grid_{grid_h}x{grid_w}.jpg")
 grid_img.save(output_path)
-print(f"Created {grid_w}x{grid_h} grid of randomly selected images at {output_path}")
+print(f"Created {grid_h}x{grid_w} grid of randomly selected images at {output_path}")
