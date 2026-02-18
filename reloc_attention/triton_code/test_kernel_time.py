@@ -1,21 +1,21 @@
 import os
 import torch
 import torch.nn.functional as F
-from reloc_triton_kernel import attention
+from reloc_triton_kernel_parallel import attention
 import time
 import numpy as np
 
 # Disable Triton kernel cache to ensure recompile on each run
 os.environ["TRITON_DISABLE_CACHE"] = "1"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 
 # ========== Configuration ==========
-Z, H, N_CTX_shared, N_CTX, D_HEAD = 1, 24, 256, 4096, 128  # assume 64 is the global (e.g., text) tokens
+Z, H, N_CTX_shared, N_CTX, D_HEAD = 1, 24, 512, 4096, 128  # assume 64 is the global (e.g., text) tokens
 GROUPS = 4
 assert N_CTX % GROUPS == 0
 group_size = N_CTX // GROUPS
 
-dtype = torch.float16
+dtype = torch.bfloat16
 device = torch.device("cuda:0")
 
 torch.manual_seed(0)
@@ -39,6 +39,11 @@ for i in range(3000):
     torch.cuda.synchronize()
     end_time = time.time()
     triton_time_list.append(end_time - start_time)
+    # check if the output is nan
+    if torch.isnan(out_triton).any():
+        print("Output is nan")
+        break
+
 
 
 # ========== PyTorch reference with group-based masking ==========

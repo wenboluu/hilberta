@@ -11,66 +11,66 @@ from typing import (
     Dict, 
     Any
 )
-
+import pdb
 import torch
 import torch.nn.functional as F
 from torch import nn
 import torch._dynamo as dynamo
 
 from utils import isinstance_str, init_generator, apply_rotary_emb
-# # Load mask files from mask_list directory
-# mask_dir = './mask_list'
+# Load mask files from mask_list directory
+mask_dir = './mask_list'
 
-# # Load 4096 masks with 4 tiles
-# mask_4096_0_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-# mask_4096_256_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_256_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-# mask_4096_512_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_512_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-# mask_4096_768_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_768_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+# Load 4096 masks with 4 tiles
+mask_4096_0_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+mask_4096_256_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_256_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+mask_4096_512_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_512_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+mask_4096_768_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_768_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
 
-# # Load 4096 masks with 16 tiles
-# mask_4096_0_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-# mask_4096_64_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_64_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-# mask_4096_128_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_128_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-# mask_4096_192_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_192_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+# Load 4096 masks with 16 tiles
+mask_4096_0_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+mask_4096_64_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_64_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+mask_4096_128_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_128_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+mask_4096_192_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_192_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
 
-# # Load 16384 masks with 4 tiles
-# mask_16384_0_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_0_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-# mask_16384_1024_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_1024_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-# mask_16384_2048_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_2048_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
-# mask_16384_3072_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_3072_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+# Load 16384 masks with 4 tiles
+mask_16384_0_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_0_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+mask_16384_1024_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_1024_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+mask_16384_2048_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_2048_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
+mask_16384_3072_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_3072_num_of_tiles_4.pt'), map_location=torch.device('cuda:0'))
 
-# # Load 16384 masks with 16 tiles
-# mask_16384_0_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_0_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-# mask_16384_256_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_256_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-# mask_16384_512_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_512_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
-# mask_16384_768_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_768_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+# Load 16384 masks with 16 tiles
+mask_16384_0_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_0_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+mask_16384_256_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_256_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+mask_16384_512_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_512_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
+mask_16384_768_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_768_num_of_tiles_16.pt'), map_location=torch.device('cuda:0'))
 
-# # Create mask dictionary
-# mask_list = {
-#     # 4096 masks with 4 tiles
-#     '4096_0_4': mask_4096_0_4,
-#     '4096_256_4': mask_4096_256_4,
-#     '4096_512_4': mask_4096_512_4,
-#     '4096_768_4': mask_4096_768_4,
+# Create mask dictionary
+mask_list = {
+    # 4096 masks with 4 tiles
+    '4096_0_4': mask_4096_0_4,
+    '4096_256_4': mask_4096_256_4,
+    '4096_512_4': mask_4096_512_4,
+    '4096_768_4': mask_4096_768_4,
     
-#     # 4096 masks with 16 tiles
-#     '4096_0_16': mask_4096_0_16,
-#     '4096_64_16': mask_4096_64_16,
-#     '4096_128_16': mask_4096_128_16,
-#     '4096_192_16': mask_4096_192_16,
+    # 4096 masks with 16 tiles
+    '4096_0_16': mask_4096_0_16,
+    '4096_64_16': mask_4096_64_16,
+    '4096_128_16': mask_4096_128_16,
+    '4096_192_16': mask_4096_192_16,
 
-#     # 16384 masks with 4 tiles
-#     '16384_0_4': mask_16384_0_4,
-#     '16384_1024_4': mask_16384_1024_4,
-#     '16384_2048_4': mask_16384_2048_4,
-#     '16384_3072_4': mask_16384_3072_4,
+    # 16384 masks with 4 tiles
+    '16384_0_4': mask_16384_0_4,
+    '16384_1024_4': mask_16384_1024_4,
+    '16384_2048_4': mask_16384_2048_4,
+    '16384_3072_4': mask_16384_3072_4,
 
-#     # 16384 masks with 16 tiles
-#     '16384_0_16': mask_16384_0_16,
-#     '16384_256_16': mask_16384_256_16,
-#     '16384_512_16': mask_16384_512_16,
-#     '16384_768_16': mask_16384_768_16,
-# }
+    # 16384 masks with 16 tiles
+    '16384_0_16': mask_16384_0_16,
+    '16384_256_16': mask_16384_256_16,
+    '16384_512_16': mask_16384_512_16,
+    '16384_768_16': mask_16384_768_16,
+}
 
 class Attention(nn.Module):
     r"""
@@ -918,61 +918,37 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
 
 
         # ======================Uncomment For Inference Using Triton======================
-        N_CTX_shared = 512
-        N_CTX = query.shape[-2] - N_CTX_shared
-        GROUPS = 4
+        # N_CTX_shared = 512
+        # N_CTX = query.shape[-2] - N_CTX_shared
+        # GROUPS = 4
 
-        query_shared = query[:, :, :N_CTX_shared, :]
-        from triton_code.reloc_triton_kernel import attention
+        # query_shared = query[:, :, :N_CTX_shared, :]
+        # from triton_code.reloc_triton_kernel import attention
         
-        image_attn_output = attention(query, key, value, N_CTX_shared, N_CTX, False, 1.0, GROUPS, False)[:, :, N_CTX_shared:, :]
+        # image_attn_output = attention(query, key, value, N_CTX_shared, N_CTX, False, 1.0, GROUPS, False)[:, :, N_CTX_shared:, :]
 
-        shared_attn_output = F.scaled_dot_product_attention(query_shared, key, value, attn_mask=None, dropout_p=0.0, is_causal=False)
-        hidden_states = torch.cat([shared_attn_output, image_attn_output], dim=2)
-        hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-        hidden_states = hidden_states.to(query.dtype)
+        # shared_attn_output = F.scaled_dot_product_attention(query_shared, key, value, attn_mask=None, dropout_p=0.0, is_causal=False)
+        # hidden_states = torch.cat([shared_attn_output, image_attn_output], dim=2)
+        # hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+        # hidden_states = hidden_states.to(query.dtype)
         # ======================Uncomment For Inference Using Triton======================
 
 
         # ======================Uncomment For Parallel Triton Kernel======================
-        # def forward_attn(query, key, value, batch_size, head_dim, attn):
-        #     N_CTX_shared = 512
-        #     N_CTX = query.shape[-2] - N_CTX_shared
-        #     GROUPS = 4
-
-        #     query_shared = query[:, :, :N_CTX_shared, :]
-        #     shared_out = F.scaled_dot_product_attention(
-        #         query_shared, key, value,
-        #         attn_mask=None, dropout_p=0.0, is_causal=False
-        #     )
-        #     from triton_code.reloc_triton_kernel import attention  
-
-        #     image_out = attention(
-        #         query, key, value,
-        #         N_CTX_shared,   # 
-        #         N_CTX,          
-        #         False,          
-        #         1.0,            
-        #         GROUPS,
-        #         False           
-        #     )
-        #     image_out = image_out[:, :, N_CTX_shared:, :]
-
-        #     hidden = torch.cat([shared_out, image_out], dim=2)
-        #     hidden = hidden.transpose(1, 2).reshape(
-        #         batch_size, -1, attn.heads * head_dim
-        #     ).to(query.dtype)
-
-        #     return hidden
-
-        # compiled_attn = torch.compile(
-        #     forward_attn,
-        #     backend="inductor",  
-        #     mode="max-autotune"   
-        # )
-
-        # hidden_states = compiled_attn(query, key, value, batch_size, head_dim, attn)
-
+        from triton_code.reloc_triton_kernel_parallel import attention
+        N_CTX_shared = 512
+        N_CTX = query.shape[-2] - N_CTX_shared
+        GROUPS = 4
+        # check if the output is nan
+        if torch.isnan(hidden_states).any():
+            print("Output is nan")
+            pdb.set_trace()
+        hidden_states = attention(query, key, value, N_CTX_shared, N_CTX, False, 1.0 / 128**0.5, GROUPS, False).to(query.dtype)
+        hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+        # check if the output is nan
+        if torch.isnan(hidden_states).any():
+            print("Output is nan")
+            pdb.set_trace()
         # ======================Uncomment For Parallel Triton Kernel======================
 
         if encoder_hidden_states is not None:
@@ -983,9 +959,15 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
 
             # linear proj
             hidden_states = attn.to_out[0](hidden_states)
+            if torch.isnan(hidden_states).any():
+                print("Output is nan")
+                pdb.set_trace()
             # dropout
             hidden_states = attn.to_out[1](hidden_states)
             encoder_hidden_states = attn.to_add_out(encoder_hidden_states)
+            if torch.isnan(encoder_hidden_states).any():
+                print("Output is nan")
+                pdb.set_trace()
             return hidden_states, encoder_hidden_states
         else:
             return hidden_states

@@ -1,6 +1,7 @@
 from modelscope.hub.snapshot_download import snapshot_download
-from diffusers import FluxKontextPipeline  # 改成你实际模块
+from diffusers import FluxKontextPipeline
 import torch
+from diffusers.utils import load_image
 
 model_dir = snapshot_download(
     model_id="black-forest-labs/FLUX.1-Kontext-dev",
@@ -16,4 +17,13 @@ pipeline = FluxKontextPipeline.from_pretrained(
     local_files_only=True,
 )
 
-pipeline.to("cuda")
+pipeline.to("cuda:7")
+
+input_image = load_image("https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/cat.png")
+
+image = pipeline(
+  image=input_image,
+  prompt="Add a hat to the cat",
+  guidance_scale=2.5
+).images[0]
+image.save(f"flux-edit-dev.png")
