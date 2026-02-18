@@ -8,7 +8,7 @@ set -e
 # conda activate diffusion
 
 # Set CUDA device
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=7
 
 # Set the base directory
 BASE_DIR="/home/sz3684/diffusion/reorder_local_attention/triton_version/reloc_attention"

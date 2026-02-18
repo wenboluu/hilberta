@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 
 import argparse
 import numpy as np
@@ -113,8 +113,8 @@ def evaluate_dst_selection(
             index=index,
             prompt=prompt,
             random_seed=seed,
-            height=2048,
-            width=2048,
+            height=1024,
+            width=1024,
             num_tiles=num_tiles,
         )
         current_memory = torch.cuda.memory_allocated()
@@ -177,7 +177,7 @@ if __name__ == "__main__":
     pipeline = FluxPipeline.from_pretrained(
         "black-forest-labs/FLUX.1-dev",
         torch_dtype=torch.bfloat16,
-        cache_dir="/home/wl2707/.cache/huggingface/hub",
+        cache_dir="/data1/wl2707/.cache/huggingface/hub",
         local_files_only=True,
     ).to(device)
 
@@ -186,7 +186,7 @@ if __name__ == "__main__":
     pipeline.customized_call = types.MethodType(customized_call, pipeline)
     pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
 
-    pipeline.load_lora_weights("/home/sz3684/diffusion/reorder_local_attention/triton_version/reloc_attention/lora_weight/ckpt_2048_16/checkpoint-1565-")
+    pipeline.load_lora_weights("/home/sz3684/diffusion/reorder_local_attention/triton_version/reloc_attention/lora_weight/ckpt_2048_16/checkpoint-2400")
 
     evaluate_dst_selection(
         pipeline=pipeline,

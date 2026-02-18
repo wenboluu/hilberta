@@ -77,7 +77,7 @@ for i in range(2000):
     # Launch first operation in stream 1
     # s1.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(s1):
-        _ = F.scaled_dot_product_attention(
+        pytorch_output = F.scaled_dot_product_attention(
             q_prime, k_prime, v_prime,
             attn_mask=mask_2[None, None, :, :],
             dropout_p=0.0
@@ -86,8 +86,7 @@ for i in range(2000):
     # Launch second operation in stream 2
     # s2.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(s2):
-        _ = attention(q, k, v, N_CTX_shared, N_CTX, False, sm_scale, GROUPS, False)[:,:,N_CTX_shared:,:]
-
+        triton_output = attention(q, k, v, N_CTX_shared, N_CTX, False, sm_scale, GROUPS, False)[:,:,N_CTX_shared:,:]
 # Record end time
 end_event.record()
 

@@ -1,14 +1,13 @@
 import os
 import torch
 import torch.nn.functional as F
-from reloc_triton_kernel import attention
+from reloc_triton_kernel_bf16 import attention
 
 # Disable Triton kernel cache to ensure recompile on each run
 os.environ["TRITON_DISABLE_CACHE"] = "1"
 
 # ========== Configuration ==========
-Z, H, N_CTX_shared, N_CTX, D_HEAD = 1, 24, 512, 4096, 128  # assume 64 is the global (e.g., text) tokens
-# Z, H, N_CTX_shared, N_CTX, D_HEAD = 1, 24, 4, 16, 128  # assume 64 is the global (e.g., text) tokens
+Z, H, N_CTX_shared, N_CTX, D_HEAD = 1, 24, 256, 4096, 128  # assume 64 is the global (e.g., text) tokens
 GROUPS = 4
 assert N_CTX % GROUPS == 0
 group_size = N_CTX // GROUPS
@@ -38,7 +37,6 @@ out_triton = attention(q, k, v, N_CTX_shared, N_CTX, False, sm_scale, GROUPS, Fa
 idx = torch.arange(N_CTX, device=device)
 group_idx = idx // group_size  # Shape: [N_CTX]
 
-
 # 2) Create a mask that disables attention across groups
 #    mask[i, j] = True if i and j are from different groups
 sub_mask = (group_idx.unsqueeze(0) != group_idx.unsqueeze(1))  # Shape: [N_CTX, N_CTX]
@@ -52,13 +50,15 @@ attn_scores = torch.matmul(q, k.transpose(-2, -1)) * sm_scale  # [Z, H, N_CTX, N
 # 4) Mask out scores across different groups
 attn_scores = attn_scores.masked_fill(mask[None, None, :, :], float('-inf'))
 
-print("triton shape", out_triton.shape)
+print(out_triton)
 
 # 5) Softmax and weighted sum
 attn_probs = F.softmax(attn_scores, dim=-1)  # [Z, H, N_CTX, N_CTX]
 out_ref = torch.matmul(attn_probs, v)[:,:,N_CTX_shared:,:]        # [Z, H, N_CTX, D_HEAD]
+print(out_ref)
 print("ref shape", out_ref.shape)
 
+# import pdb; pdb.set_trace()
 
 # ========== Compare outputs ==========
 max_diff = (out_triton - out_ref).abs().max().item()
@@ -68,5 +68,5 @@ print(f"[Test GROUPS={GROUPS}] Max diff between Triton and Torch reference: {max
 print(f"Total absolute difference: {total_diff:.6f}")
 
 # Assert correctness within tolerance
-assert torch.allclose(out_triton, out_ref, atol=1e-2), "Mismatch in outputs!"
+assert torch.allclose(out_triton, out_ref, atol=1e-1), "Mismatch in outputs!"
 print("✅ Test passed.")

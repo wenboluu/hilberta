@@ -84,21 +84,22 @@ def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
         corner_size = 4
         seq_len = 4096
 
-        # Top-left corner
-        mask[0:corner_size, :] = 0.0  
-        mask[:, 0:corner_size] = 0.0  
+        # # Top-left corner
+        # mask[0:corner_size, :] = 0.0  
+        # mask[:, 0:corner_size] = 0.0  
 
-        # Top-right corner
-        mask[0:corner_size, seq_len-corner_size:seq_len] = 0.0
-        mask[:, seq_len-corner_size:seq_len] = 0.0
+        # # Top-right corner
+        # mask[0:corner_size, seq_len-corner_size:seq_len] = 0.0
+        # mask[:, seq_len-corner_size:seq_len] = 0.0
 
-        # Bottom-left corner
-        mask[seq_len-corner_size:seq_len, 0:corner_size] = 0.0
-        mask[:, 0:corner_size] = 0.0
+        # # Bottom-left corner
+        # mask[seq_len-corner_size:seq_len, 0:corner_size] = 0.0
+        # mask[:, 0:corner_size] = 0.0
 
-        # Bottom-right corner
-        mask[seq_len-corner_size:seq_len, seq_len-corner_size:seq_len] = 0.0
-        mask[:, seq_len-corner_size:seq_len] = 0.0
+        # # Bottom-right corner
+        # mask[seq_len-corner_size:seq_len, seq_len-corner_size:seq_len] = 0.0
+        # mask[:, seq_len-corner_size:seq_len] = 0.0
+        import pdb; pdb.set_trace()
     elif x.shape[1] == 16384:
         for i in range(48, 80):
             start = i*128 + 48
@@ -124,6 +125,7 @@ def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
         # Bottom-right corner
         mask[seq_len-corner_size:seq_len, seq_len-corner_size:seq_len] = 0.0
         mask[:, seq_len-corner_size:seq_len] = 0.0
+    # print the number of entry which equals to 0
     return mask
 
 
