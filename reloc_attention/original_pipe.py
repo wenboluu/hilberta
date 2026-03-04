@@ -3,7 +3,7 @@ from diffusers import FluxPipeline
 import time 
 
 import os 
-os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-dev", 
                                     torch_dtype=torch.bfloat16, 
                                     local_files_only=True,
@@ -13,8 +13,8 @@ pipe = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-dev",
 prompt = "A cat holding a sign that says hello world"
 image = pipe(
     prompt,
-    height=1024,
-    width=1024,
+    height=2048,
+    width=2048,
     guidance_scale=3.5,
     num_inference_steps=28,
     max_sequence_length=512,

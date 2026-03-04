@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 import argparse
 import numpy as np
@@ -44,7 +44,7 @@ def generate_image(
     end_event = torch.cuda.Event(enable_timing=True)
     start_event.record()
 
-    stable_diffusion_output = pipeline.customized_call(
+    stable_diffusion_output = pipeline(
         prompt=prompt,
         height=height,
         width=width,
@@ -182,8 +182,11 @@ if __name__ == "__main__":
     ).to(device)
 
     import types
-    from masking_utils import customized_forward, customized_call
-    pipeline.customized_call = types.MethodType(customized_call, pipeline)
+    from masking_utils import customized_call
+    # from masking_utils import customized_forward
+    from reorder_utils import customized_forward
+
+    # pipeline.customized_call = types.MethodType(customized_call, pipeline)
     pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
 
     pipeline.load_lora_weights("/home/sz3684/diffusion/reorder_local_attention/triton_version/reloc_attention/lora_weight/ckpt_2048_16/checkpoint-2400")

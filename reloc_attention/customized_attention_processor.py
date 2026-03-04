@@ -888,7 +888,6 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
 
             query = apply_rotary_emb(query, image_rotary_emb)
             key = apply_rotary_emb(key, image_rotary_emb)
-        
 
         # ======================Uncomment For Inference Using Pytorch======================
         # import yaml
@@ -915,8 +914,6 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
         # hidden_states = hidden_states.to(query.dtype)
         # ======================Uncomment For Inference Using Pytorch======================
 
-
-
         # ======================Uncomment For Inference Using Triton======================
         # N_CTX_shared = 512
         # N_CTX = query.shape[-2] - N_CTX_shared
@@ -933,22 +930,13 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
         # hidden_states = hidden_states.to(query.dtype)
         # ======================Uncomment For Inference Using Triton======================
 
-
         # ======================Uncomment For Parallel Triton Kernel======================
         from triton_code.reloc_triton_kernel_parallel import attention
         N_CTX_shared = 512
         N_CTX = query.shape[-2] - N_CTX_shared
         GROUPS = 4
-        # check if the output is nan
-        if torch.isnan(hidden_states).any():
-            print("Output is nan")
-            pdb.set_trace()
         hidden_states = attention(query, key, value, N_CTX_shared, N_CTX, False, 1.0 / 128**0.5, GROUPS, False).to(query.dtype)
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-        # check if the output is nan
-        if torch.isnan(hidden_states).any():
-            print("Output is nan")
-            pdb.set_trace()
         # ======================Uncomment For Parallel Triton Kernel======================
 
         if encoder_hidden_states is not None:
@@ -971,4 +959,3 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
             return hidden_states, encoder_hidden_states
         else:
             return hidden_states
-        

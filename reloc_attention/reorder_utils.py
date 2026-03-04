@@ -52,25 +52,19 @@ def untile(x_tiled, num_tiles):
 
     return x_tiles.view(B, H * W, C)
 
-def hilbert_tile(x, reverse, offset=0):
-    # if reverse:
-    #     x = x.flip(1)
+def hilbert_tile(x, offset=0):
     hilbert_index = get_hilbert_flat_indices(6).to(x.device)
     hilbert_index_offset = torch.cat([hilbert_index[offset:], hilbert_index[:offset]])
     return torch.gather(x, 1, hilbert_index_offset.unsqueeze(0).unsqueeze(-1).repeat(x.shape[0], 1, x.shape[-1]))
 
-def hilbert_untile(x_hilbert, reverse, offset=0):
-    # if reverse:
-    #     x_hilbert = x_hilbert.flip(1)
+def hilbert_untile(x_hilbert, offset=0):
     inverse_index = get_inverse_hilbert_indices(6).to(x_hilbert.device)
-    if reverse:
-        inverse_index = inverse_index.flip(0)
     if offset > 0:
         x_hilbert = torch.cat([x_hilbert[:, -offset:], x_hilbert[:, :-offset]], dim=1)
 
     return torch.gather(x_hilbert, 1, inverse_index.unsqueeze(0).unsqueeze(-1).repeat(x_hilbert.shape[0], 1, x_hilbert.shape[-1]))
 
-def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = False, offset = 0):
+def apply_hilbert_reorder(image_rotary_emb, hidden_states, num_tiles, offset = 0):
     """
     Reorders the image part of rotary embeddings and hidden states using Hilbert curve,
     tiles them for each image patch, and prepares them for model input.
@@ -94,34 +88,21 @@ def apply_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states
     text_emb_2, image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
 
     # Tile and reorder image embeddings with Hilbert curve
-    tiled_image_emb_1 = hilbert_tile(image_emb_1.unsqueeze(0), reverse, offset).squeeze(0)
-    tiled_image_emb_2 = hilbert_tile(image_emb_2.unsqueeze(0), reverse, offset).squeeze(0)
+    tiled_image_emb_1 = hilbert_tile(image_emb_1.unsqueeze(0), offset).squeeze(0)
+    tiled_image_emb_2 = hilbert_tile(image_emb_2.unsqueeze(0), offset).squeeze(0)
 
-    # Repeat text embedding for each tile
-    text_emb_1 = text_emb_1.repeat(num_tiles, 1, 1)
-    tiled_image_emb_1 = tiled_image_emb_1.view(num_tiles, -1, tiled_image_emb_1.shape[-1])
-    image_rotary_emb_1 = torch.cat([text_emb_1, tiled_image_emb_1], dim=1)
-
-    text_emb_2 = text_emb_2.repeat(num_tiles, 1, 1)
-    tiled_image_emb_2 = tiled_image_emb_2.view(num_tiles, -1, tiled_image_emb_2.shape[-1])
-    image_rotary_emb_2 = torch.cat([text_emb_2, tiled_image_emb_2], dim=1)
+    image_rotary_emb_1 = torch.cat([text_emb_1, tiled_image_emb_1], dim=0)
+    image_rotary_emb_2 = torch.cat([text_emb_2, tiled_image_emb_2], dim=0)
 
     image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
 
     # Reorder hidden states
-    hidden_states = hilbert_tile(hidden_states, reverse, offset)
-    B, N, C = hidden_states.shape
-    hidden_states = hidden_states.view(B * num_tiles, -1, C)
+    hidden_states = hilbert_tile(hidden_states, offset)
 
-    # Tile encoder hidden states
-    if encoder_hidden_states.shape[0] != num_tiles:
-        encoder_hidden_states = encoder_hidden_states.repeat(num_tiles, 1, 1)
-    else:
-        encoder_hidden_states = encoder_hidden_states
+    return image_rotary_emb, hidden_states
 
-    return image_rotary_emb, hidden_states, encoder_hidden_states
 
-def recover_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = False, offset=0):
+def recover_hilbert_reorder(image_rotary_emb, hidden_states, num_tiles, offset=0):
     """
     Recovers original ordering from Hilbert-tiled embeddings and hidden states.
 
@@ -141,31 +122,69 @@ def recover_hilbert_reorder(image_rotary_emb, hidden_states, encoder_hidden_stat
     image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
 
     # Split text + image parts
-    text_emb_1, tiled_image_emb_1 = image_rotary_emb_1[:, :512], image_rotary_emb_1[:, 512:]
-    text_emb_2, tiled_image_emb_2 = image_rotary_emb_2[:, :512], image_rotary_emb_2[:, 512:]
-
-    # Merge tiles back to [num_tiles * tile_len, dim]
-    flat_image_emb_1 = tiled_image_emb_1.reshape(-1, tiled_image_emb_1.shape[-1])
-    flat_image_emb_2 = tiled_image_emb_2.reshape(-1, tiled_image_emb_2.shape[-1])
+    text_emb_1, tiled_image_emb_1 = image_rotary_emb_1[:512], image_rotary_emb_1[512:]
+    text_emb_2, tiled_image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
 
     # Undo Hilbert ordering
-    recovered_image_emb_1 = hilbert_untile(flat_image_emb_1.unsqueeze(0), reverse, offset).squeeze(0)
-    recovered_image_emb_2 = hilbert_untile(flat_image_emb_2.unsqueeze(0), reverse, offset).squeeze(0)
+    recovered_image_emb_1 = hilbert_untile(tiled_image_emb_1.unsqueeze(0), offset).squeeze(0)
+    recovered_image_emb_2 = hilbert_untile(tiled_image_emb_2.unsqueeze(0), offset).squeeze(0)
 
-    # Merge text + image
-    text_emb_1 = text_emb_1[0]  # All tiles share same text
-    text_emb_2 = text_emb_2[0]
     image_rotary_emb_1 = torch.cat([text_emb_1, recovered_image_emb_1], dim=0)
     image_rotary_emb_2 = torch.cat([text_emb_2, recovered_image_emb_2], dim=0)
     image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
 
-    B = hidden_states.shape[0] // num_tiles
-    flat_hidden = hidden_states.reshape(B, -1, hidden_states.shape[-1])
-    hidden_states = hilbert_untile(flat_hidden, reverse, offset)
+    hidden_states = hilbert_untile(hidden_states, offset)
 
-    # encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True)
+    return image_rotary_emb, hidden_states
 
-    return image_rotary_emb, hidden_states, encoder_hidden_states
+def apply_circular_shift(hidden_states, offset):
+    """
+    Apply circular shift to hidden_states for offset effect.
+    
+    Args:
+        hidden_states: [B * num_tiles, seq_len, C]
+        offset: number of positions to shift
+    
+    Returns:
+        shifted hidden_states
+    """
+    if offset == 0:
+        return hidden_states
+    
+    B_tiles, seq_len, C = hidden_states.shape
+    # Apply circular shift along the sequence dimension
+    return torch.cat([hidden_states[:, -offset:], hidden_states[:, :-offset]], dim=1)
+
+def apply_circular_shift_to_rotary_emb(image_rotary_emb, offset):
+    """
+    Apply circular shift to the image part of rotary embeddings.
+    
+    Args:
+        image_rotary_emb: tuple of (emb_1, emb_2), each of shape [512 + image_len, dim]
+        offset: number of positions to shift
+    
+    Returns:
+        shifted rotary embeddings
+    """
+    if offset == 0:
+        return image_rotary_emb
+        
+    image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
+    
+    # Split text and image parts
+    text_emb_1, image_emb_1 = image_rotary_emb_1[:512], image_rotary_emb_1[512:]
+    text_emb_2, image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
+    
+    # Apply circular shift to image parts
+    shifted_image_emb_1 = torch.cat([image_emb_1[-offset:], image_emb_1[:-offset]], dim=0)
+    shifted_image_emb_2 = torch.cat([image_emb_2[-offset:], image_emb_2[:-offset]], dim=0)
+    
+    # Recombine
+    new_emb_1 = torch.cat([text_emb_1, shifted_image_emb_1], dim=0)
+    new_emb_2 = torch.cat([text_emb_2, shifted_image_emb_2], dim=0)
+    
+    return (new_emb_1, new_emb_2)
+
 
 
 def customized_forward(
@@ -182,15 +201,14 @@ def customized_forward(
     controlnet_single_block_samples=None,
     return_dict: bool = True,
     controlnet_blocks_repeat: bool = False,
-    t: int = 0,
 ) -> Union[torch.FloatTensor, Transformer2DModelOutput]:
     def load_config(config_path):
         """Load configuration from YAML file"""
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         return config
-
-    config = load_config("/home/sz3684/diffusion/reorder_local_attention/diffusion_reorder/tomesd_global/config.yaml")
+    
+    config = load_config("/home/sz3684/diffusion/reorder_local_attention/triton_version/reloc_attention/config.yaml")
 
     num_tiles = config['num_tiles'] if 'num_tiles' in config else 16
 
@@ -211,7 +229,6 @@ def customized_forward(
     hidden_states = self.x_embedder(hidden_states)
 
     timestep = timestep.to(hidden_states.dtype) * 1000
-
     if guidance is not None:
         guidance = guidance.to(hidden_states.dtype) * 1000
     else:
@@ -242,26 +259,24 @@ def customized_forward(
 
     off_set_counter = 0 
 
+    # Apply initial Hilbert reordering once
+    image_rotary_emb, hidden_states = apply_hilbert_reorder(
+        image_rotary_emb, hidden_states, num_tiles, offset = 0
+    )
+
+    original_hidden_states = hidden_states.clone()
+
     counter = 0
-    off_set_counter = 0 
     cycle = 2
     off_set_unit = (N//num_tiles)//cycle
+    # off_set_unit = 0
+    
     for index_block, block in enumerate(self.transformer_blocks):
-        off_set_counter = ((counter//2)%cycle) * off_set_unit
+        # Apply circular shift to both hidden_states and rotary_emb
+        hidden_states = apply_circular_shift(hidden_states, off_set_unit)
+        image_rotary_emb = apply_circular_shift_to_rotary_emb(image_rotary_emb, off_set_unit)
 
-        # Reverse every one step
-        reverse = counter % 2 == 0
-        tile_flag =  counter not in [i for i in range(0, 19, 2*cycle + 1)]
-        if tile_flag:
-            # hilbert tile before each block        
-            image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
-                image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
-            )
-        else:
-            encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True)
-            # encoder_hidden_states = encoder_hidden_states[0].unsqueeze(0)
-
-        # Entering the block
+        # # # Entering the block
         encoder_hidden_states, hidden_states = block(
             hidden_states=hidden_states,
             encoder_hidden_states=encoder_hidden_states,
@@ -269,32 +284,17 @@ def customized_forward(
             image_rotary_emb=image_rotary_emb,
             joint_attention_kwargs=joint_attention_kwargs,
         )
-
-        if tile_flag:
-            # hilbert untile after each block
-            image_rotary_emb, hidden_states, encoder_hidden_states = recover_hilbert_reorder(
-                image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse=reverse, offset = off_set_counter
-            )
         counter += 1
 
     for index_block, block in enumerate(self.single_transformer_blocks):
-        off_set_counter = ((counter//2)%cycle) * off_set_unit
-
-        # Reverse every one step
-        reverse = counter % 2 == 0
-        tile_flag =  counter not in [i for i in range(0, 38, 2*cycle + 1)]
-        if tile_flag:
-            # hilbert tile before each block
-            image_rotary_emb, hidden_states, encoder_hidden_states = apply_hilbert_reorder(
-                image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
-            )
-        else:
-            encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True)
-            # encoder_hidden_states = encoder_hidden_states[0].unsqueeze(0)
+        
+        # Apply circular shift to both hidden_states and rotary_emb
+        hidden_states = apply_circular_shift(hidden_states, off_set_unit)
+        image_rotary_emb = apply_circular_shift_to_rotary_emb(image_rotary_emb, off_set_unit)
 
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
-        # Entering the block
+        # # # Entering the block
         hidden_states = block(
             hidden_states=hidden_states,
             temb=temb,
@@ -303,14 +303,22 @@ def customized_forward(
         )
 
         encoder_hidden_states, hidden_states = hidden_states[:, :encoder_hidden_states.shape[1], :], hidden_states[:, encoder_hidden_states.shape[1]:, :]
-
-        if tile_flag:
-            # hilbert untile after each block
-            image_rotary_emb, hidden_states, encoder_hidden_states = recover_hilbert_reorder(
-                image_rotary_emb, hidden_states, encoder_hidden_states, num_tiles, reverse = reverse, offset = off_set_counter
-            )
         counter += 1
 
+    # Apply final recovery: first reverse all accumulated shifts, then untile
+    total_shifts = counter * off_set_unit
+    effective_shift = total_shifts % hidden_states.shape[1]
+    
+    # Reverse the accumulated circular shifts for both hidden_states and rotary_emb
+    if effective_shift > 0:
+        reverse_shift = hidden_states.shape[1] - effective_shift
+        hidden_states = apply_circular_shift(hidden_states, reverse_shift)
+        image_rotary_emb = apply_circular_shift_to_rotary_emb(image_rotary_emb, reverse_shift)
+ 
+    # Now recover with no offset since we've already reversed the shifts
+    image_rotary_emb, hidden_states = recover_hilbert_reorder(
+        image_rotary_emb, hidden_states, num_tiles, offset = 0
+    )
 
     # hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
