@@ -257,14 +257,10 @@ def customized_forward(
     image_rotary_emb = self.pos_embed(ids)
     B, N, C = hidden_states.shape
 
-    off_set_counter = 0 
-
     # Apply initial Hilbert reordering once
     image_rotary_emb, hidden_states = apply_hilbert_reorder(
         image_rotary_emb, hidden_states, num_tiles, offset = 0
     )
-
-    original_hidden_states = hidden_states.clone()
 
     counter = 0
     cycle = 2
