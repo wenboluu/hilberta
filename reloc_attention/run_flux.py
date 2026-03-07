@@ -1,5 +1,4 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 import argparse
 import numpy as np
@@ -172,24 +171,25 @@ if __name__ == "__main__":
     dst_method = dst_method
     output_folder = output_folder
     results_file_path = f"time.md"
-    device = "cuda:0"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
 
     pipeline = FluxPipeline.from_pretrained(
         "black-forest-labs/FLUX.1-dev",
         torch_dtype=torch.bfloat16,
-        cache_dir="/data1/wl2707/.cache/huggingface/hub",
+        cache_dir="/scratch/sz3684/.cache/",
         local_files_only=True,
     ).to(device)
 
     import types
     from masking_utils import customized_call
-    # from masking_utils import customized_forward
-    from reorder_utils import customized_forward
+    from masking_utils import customized_forward
+    # from reorder_utils import customized_forward
 
     # pipeline.customized_call = types.MethodType(customized_call, pipeline)
     pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
 
-    pipeline.load_lora_weights("/home/sz3684/diffusion/reorder_local_attention/triton_version/reloc_attention/lora_weight/ckpt_2048_16/checkpoint-2400")
+    pipeline.load_lora_weights("/scratch/sz3684/HilbertA/reorder_local_attention/reloc_attention/lora/checkpoint-2400")
 
     evaluate_dst_selection(
         pipeline=pipeline,

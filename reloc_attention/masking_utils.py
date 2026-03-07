@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import os 
+import glob
 from diffusers.utils import USE_PEFT_BACKEND, is_torch_version, logging, scale_lora_layers, unscale_lora_layers
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from utils import get_hilbert_flat_indices
@@ -80,51 +81,27 @@ def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
             end = i*64 + 40 
             mask[start:end, :] = 0.0
             mask[:, start:end] = 0.0
-    
+
         corner_size = 4
         seq_len = 4096
 
-        # # Top-left corner
-        # mask[0:corner_size, :] = 0.0  
-        # mask[:, 0:corner_size] = 0.0  
-
-        # # Top-right corner
-        # mask[0:corner_size, seq_len-corner_size:seq_len] = 0.0
-        # mask[:, seq_len-corner_size:seq_len] = 0.0
-
-        # # Bottom-left corner
-        # mask[seq_len-corner_size:seq_len, 0:corner_size] = 0.0
-        # mask[:, 0:corner_size] = 0.0
-
-        # # Bottom-right corner
-        # mask[seq_len-corner_size:seq_len, seq_len-corner_size:seq_len] = 0.0
-        # mask[:, seq_len-corner_size:seq_len] = 0.0
-        import pdb; pdb.set_trace()
+        index = torch.load(f'./indices_{x.shape[1]}_{x.shape[1]//16}.pt')
+        if index is not None:
+            index = torch.tensor(index, device=x.device)
+            mask.index_fill_(0, index, 0.0)
+            mask.index_fill_(1, index, 0.0)
     elif x.shape[1] == 16384:
-        for i in range(48, 80):
-            start = i*128 + 48
-            end = i*128 + 80
-            mask[start:end, :] = 0.0
-            mask[:, start:end] = 0.0
+        # for i in range(48, 80):
+        #     start = i*128 + 48
+        #     end = i*128 + 80
+        #     mask[start:end, :] = 0.0
+        #     mask[:, start:end] = 0.0
 
-        corner_size = 4
-        seq_len = 16384
-
-        # Top-left corner
-        mask[0:corner_size, :] = 0.0  
-        mask[:, 0:corner_size] = 0.0  
-
-        # Top-right corner
-        mask[0:corner_size, seq_len-corner_size:seq_len] = 0.0
-        mask[:, seq_len-corner_size:seq_len] = 0.0
-
-        # Bottom-left corner
-        mask[seq_len-corner_size:seq_len, 0:corner_size] = 0.0
-        mask[:, 0:corner_size] = 0.0
-
-        # Bottom-right corner
-        mask[seq_len-corner_size:seq_len, seq_len-corner_size:seq_len] = 0.0
-        mask[:, seq_len-corner_size:seq_len] = 0.0
+        index = torch.load(f'./indices_{x.shape[1]}_{x.shape[1]//16}.pt')
+        if index is not None:
+            index = torch.tensor(index, device=x.device)
+            mask.index_fill_(0, index, 0.0)
+            mask.index_fill_(1, index, 0.0)
     # print the number of entry which equals to 0
     return mask
 

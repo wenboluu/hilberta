@@ -890,28 +890,28 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
             key = apply_rotary_emb(key, image_rotary_emb)
 
         # ======================Uncomment For Inference Using Pytorch======================
-        # import yaml
-        # with open('./config.yaml', 'r') as f:
-        #     config = yaml.safe_load(f)
-        # num_of_tiles = config['num_tiles']
-        # full_attn_step = config['full_attn_step']
-        # full_attn_layer = config['full_attn_layer']
+        import yaml
+        with open('./config.yaml', 'r') as f:
+            config = yaml.safe_load(f)
+        num_of_tiles = config['num_tiles']
+        full_attn_step = config['full_attn_step']
+        full_attn_layer = config['full_attn_layer']
 
-        # offset = self._tome_info["args"]["offset"]
-        # L, S = query.shape[-2], key.shape[-2]
-        # if L == 4608:
-        #     image_size = 4096
-        # else:
-        #     image_size = 16384
+        offset = self._tome_info["args"]["offset"]
+        L, S = query.shape[-2], key.shape[-2]
+        if L == 4608:
+            image_size = 4096
+        else:
+            image_size = 16384
 
-        # attn_mask = torch.zeros(L, S, dtype=query.dtype, device=query.device)
-        # if step not in full_attn_step and layer_idx not in full_attn_layer:
-        #     mask = mask_list[f'{image_size}_{offset}_{num_of_tiles}']
-        #     attn_mask[-image_size:, -image_size:] = attn_mask[-image_size:, -image_size:] + mask
+        attn_mask = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+        if step not in full_attn_step and layer_idx not in full_attn_layer:
+            mask = mask_list[f'{image_size}_{offset}_{num_of_tiles}']
+            attn_mask[-image_size:, -image_size:] = attn_mask[-image_size:, -image_size:] + mask
 
-        # hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)
-        # hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-        # hidden_states = hidden_states.to(query.dtype)
+        hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)
+        hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+        hidden_states = hidden_states.to(query.dtype)
         # ======================Uncomment For Inference Using Pytorch======================
 
         # ======================Uncomment For Inference Using Triton======================
@@ -931,12 +931,12 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
         # ======================Uncomment For Inference Using Triton======================
 
         # ======================Uncomment For Parallel Triton Kernel======================
-        from triton_code.reloc_triton_kernel_parallel import attention
-        N_CTX_shared = 512
-        N_CTX = query.shape[-2] - N_CTX_shared
-        GROUPS = 4
-        hidden_states = attention(query, key, value, N_CTX_shared, N_CTX, False, 1.0 / 128**0.5, GROUPS, False).to(query.dtype)
-        hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
+        # from triton_code.reloc_triton_kernel_parallel import attention
+        # N_CTX_shared = 512
+        # N_CTX = query.shape[-2] - N_CTX_shared
+        # GROUPS = 4
+        # hidden_states = attention(query, key, value, N_CTX_shared, N_CTX, False, 1.0 / 128**0.5, GROUPS, False).to(query.dtype)
+        # hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         # ======================Uncomment For Parallel Triton Kernel======================
 
         if encoder_hidden_states is not None:

@@ -10,6 +10,9 @@ reloc_attention/output/
 reloc_attention/coco_dataset/
 reloc_attention/result/
 reloc_attention/mask_list_closed/
+reloc_attention/penv/
+reloc_attention/lora/
+reloc_attention/recompute_indices/
 
 # Ignore all Python cache directories
 **/__pycache__/
