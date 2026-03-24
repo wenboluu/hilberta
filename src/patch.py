@@ -1,15 +1,16 @@
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Optional, Type
 
 import torch
 import yaml
 
-from .customized_attention_processor import \
-    FluxAttnProcessor2_0_for_transformerblock_global
-from .utils import init_generator, isinstance_str
+from .attention_processor import HilbertaAttnProcessor
+from .utils import isinstance_str
 
 
-def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
-    class ToMeBlock(block_class):
+def _make_hilberta_joint_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
+    """Wrap a FluxTransformerBlock to average encoder states across tiles after attention."""
+
+    class HilbertaBlock(block_class):
         _parent = block_class
 
         def forward(
@@ -29,7 +30,6 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
             )
             joint_attention_kwargs = joint_attention_kwargs or {}
 
-            # Attention.
             attn_output, context_attn_output = self.attn(
                 hidden_states=norm_hidden_states,
                 encoder_hidden_states=norm_encoder_hidden_states,
@@ -39,38 +39,33 @@ def make_diffusers_flux_tome_block(block_class: Type[torch.nn.Module]) -> Type[t
                 **joint_attention_kwargs,
             )
 
-            # COPY THE ENCODER HIDDEN STATES
-            encoder_hidden_states = encoder_hidden_states.sum(dim=0) / encoder_hidden_states.shape[0]
-            encoder_hidden_states = encoder_hidden_states.unsqueeze(0).repeat(num_of_tiles, 1, 1)
+            # Average encoder hidden states across tiles then broadcast back
+            encoder_hidden_states = encoder_hidden_states.mean(dim=0, keepdim=True).expand(num_of_tiles, -1, -1)
 
-            attn_output = gate_msa.unsqueeze(1) * attn_output
-            hidden_states = hidden_states + attn_output
-
+            # Image path
+            hidden_states = hidden_states + gate_msa.unsqueeze(1) * attn_output
             norm_hidden_states = self.norm2(hidden_states)
             norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
+            hidden_states = hidden_states + gate_mlp.unsqueeze(1) * self.ff(norm_hidden_states)
 
-            ff_output = self.ff(norm_hidden_states)
-            ff_output = gate_mlp.unsqueeze(1) * ff_output
-
-            hidden_states = hidden_states + ff_output
-
-            context_attn_output = c_gate_msa.unsqueeze(1) * context_attn_output
-            encoder_hidden_states = encoder_hidden_states + context_attn_output
-
+            # Context path
+            encoder_hidden_states = encoder_hidden_states + c_gate_msa.unsqueeze(1) * context_attn_output
             norm_encoder_hidden_states = self.norm2_context(encoder_hidden_states)
             norm_encoder_hidden_states = norm_encoder_hidden_states * (1 + c_scale_mlp[:, None]) + c_shift_mlp[:, None]
+            encoder_hidden_states = encoder_hidden_states + c_gate_mlp.unsqueeze(1) * self.ff_context(norm_encoder_hidden_states)
 
-            context_ff_output = self.ff_context(norm_encoder_hidden_states)
-            encoder_hidden_states = encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
             if encoder_hidden_states.dtype == torch.float16:
                 encoder_hidden_states = encoder_hidden_states.clip(-65504, 65504)
 
             return encoder_hidden_states, hidden_states
-    return ToMeBlock
+
+    return HilbertaBlock
 
 
-def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
-    class ToMeBlock(block_class):
+def _make_hilberta_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
+    """Wrap a FluxSingleTransformerBlock to pass step/layer info through attention."""
+
+    class HilbertaBlock(block_class):
         _parent = block_class
 
         def forward(
@@ -86,6 +81,7 @@ def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.
             norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
             mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
             joint_attention_kwargs = joint_attention_kwargs or {}
+
             attn_output = self.attn(
                 hidden_states=norm_hidden_states,
                 image_rotary_emb=image_rotary_emb,
@@ -94,107 +90,68 @@ def make_flux_single_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.
                 **joint_attention_kwargs,
             )
 
-            hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
-            gate = gate.unsqueeze(1)
-            hidden_states = gate * self.proj_out(hidden_states)
-
+            hidden_states = gate.unsqueeze(1) * self.proj_out(
+                torch.cat([attn_output, mlp_hidden_states], dim=2)
+            )
             hidden_states = residual + hidden_states
+
             if hidden_states.dtype == torch.float16:
                 hidden_states = hidden_states.clip(-65504, 65504)
 
             return hidden_states
 
-    return ToMeBlock
+    return HilbertaBlock
 
 
-def apply_patch(
-    model: torch.nn.Module,
-    ratio: float = 0.5,
-    max_downsample: int = 1,
-    sx: int = 2,
-    sy: int = 2,
-    use_rand: bool = True,
-    merge_attn: bool = True,
-    merge_crossattn: bool = False,
-    merge_mlp: bool = False,
-    dst_selection: str = "original",
-    num_tiles: int = 16,
-    merge_method: str = "original",
-    unet_scheduler=None,
-    toma_variant=None,
-    height=None,
-):
-    remove_patch(model)
+def apply_hilberta_patch(model: torch.nn.Module, num_tiles: int = 16, height=None):
+    """Apply Hilberta attention patching to a FluxPipeline.
 
-    is_diffusers_flux = isinstance_str(model, "FluxPipeline")
+    Replaces each transformer block with a Hilberta-wrapped version that uses
+    Hilbert-curve tiled attention masks with sliding offsets.
+    """
+    remove_hilberta_patch(model)
 
-    if is_diffusers_flux:
-        transformer_model = model.transformer
-    else:
-        print("Model is not a supported model for ToMe patching.")
+    if not isinstance_str(model, "FluxPipeline"):
+        raise ValueError("Model is not a FluxPipeline — Hilberta patching is not supported.")
+
+    transformer = model.transformer
 
     with open('./src/config.yaml', 'r') as f:
         config = yaml.safe_load(f)
-    num_of_tiles = config['num_tiles']
-    sliding_cycle = config['sliding_cycle']
+    num_of_tiles = config['tiling']['num_tiles']
+    sliding_cycle = config['tiling']['sliding_cycle']
 
     if height == 1024:
         image_size = 4096
     elif height == 2048:
         image_size = 16384
+    else:
+        raise ValueError(f"Unsupported height {height}, expected 1024 or 2048.")
 
-    info_list = []
-    for i in range(sliding_cycle):
-        transformer_model._tome_info = {
-            "size": None,
-            "args": {
-                "ratio": ratio,
-                "max_downsample": max_downsample,
-                "sx": sx,
-                "sy": sy,
-                "use_rand": use_rand,
-                "generator": None,
-                "merge_attn": merge_attn,
-                "merge_crossattn": merge_crossattn,
-                "merge_mlp": merge_mlp,
-                "dst_selection": dst_selection,
-                "k": num_tiles * 4,
-                "merge_method": merge_method,
-                "unet_scheduler": unet_scheduler,
-                "offset": (image_size // num_of_tiles) // sliding_cycle * i,
-            },
-        }
-        info_list.append(transformer_model._tome_info)
-
-    make_tome_block_fn = make_diffusers_flux_tome_block
-    make_single_tome_block_fn = make_flux_single_block
+    # Build sliding offset info for each cycle position
+    tile_len = image_size // num_of_tiles
+    info_list = [{"offset": (tile_len // sliding_cycle) * i} for i in range(sliding_cycle)]
 
     counter = 0
-    for _, module in transformer_model.named_modules():
+    for _, module in transformer.named_modules():
         if isinstance_str(module, "FluxTransformerBlock"):
-            module.__class__ = make_tome_block_fn(module.__class__)
-            module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
-            info_counter = counter % sliding_cycle
-            module._tome_info = info_list[info_counter]
-            module.attn.processor._tome_info = info_list[info_counter]
+            module.__class__ = _make_hilberta_joint_block(module.__class__)
+            module.attn.processor = HilbertaAttnProcessor()
+            module.attn.processor._hilberta_info = info_list[counter % sliding_cycle]
             counter += 1
         elif isinstance_str(module, "FluxSingleTransformerBlock"):
-            module.__class__ = make_single_tome_block_fn(module.__class__)
-            module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
-            info_counter = counter % sliding_cycle
-            module._tome_info = info_list[info_counter]
-            module.attn.processor._tome_info = info_list[info_counter]
+            module.__class__ = _make_hilberta_single_block(module.__class__)
+            module.attn.processor = HilbertaAttnProcessor()
+            module.attn.processor._hilberta_info = info_list[counter % sliding_cycle]
             counter += 1
+
     return model
 
 
-def remove_patch(model: torch.nn.Module):
-    """Removes a patch from a ToMe Diffusion module if it was already patched."""
-    # For diffusers
-    model = model.transformer
-
-    for _, module in model.named_modules():
-        if module.__class__.__name__ == "ToMeBlock":
+def remove_hilberta_patch(model: torch.nn.Module):
+    """Remove Hilberta patching, restoring original block classes."""
+    transformer = model.transformer
+    for _, module in transformer.named_modules():
+        if module.__class__.__name__ == "HilbertaBlock":
             module.__class__ = module._parent
-
     return model
