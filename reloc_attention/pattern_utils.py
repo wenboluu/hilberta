@@ -24,8 +24,6 @@ def create_closed_hilbert_mapping(p: int, device: torch.device) -> tuple[torch.T
     index = torch.arange(N, device=device)
     cut_off = N // 4
 
-    import pdb; pdb.set_trace()
-
     fwd = torch.gather(index, 0, base)
     fwd_mid = fwd[cut_off:-cut_off]
 
@@ -160,12 +158,11 @@ def find_most_affected_tokens_by_hilbert_reordering(
 
     k = min(top_k, disruption_scores.numel())
     top_indices = select_topk_indices_deterministic(disruption_scores, k)
-    
     return top_indices.tolist()
 
 
 if __name__ == "__main__":
-    indices_64_4 = find_most_affected_tokens_by_hilbert_reordering(64, 4)
+    indices_64_4 = find_most_affected_tokens_by_hilbert_reordering(64, 14)
     # indices_4096_256 = find_most_affected_tokens_by_hilbert_reordering(4096, 256)
     # torch.save(indices_4096_256, "indices_4096_256.pt")
     # indices_16384_1024 = find_most_affected_tokens_by_hilbert_reordering(16384, 1024)

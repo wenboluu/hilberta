@@ -13,6 +13,10 @@ reloc_attention/mask_list_closed/
 reloc_attention/penv/
 reloc_attention/lora/
 reloc_attention/recompute_indices/
+reloc_attention/mask_hilbert/
+reloc_attention/mask_morton/
+reloc_attention/flux_2048/
+reloc_attention/__MACOSX/
 
 # Ignore all Python cache directories
 **/__pycache__/

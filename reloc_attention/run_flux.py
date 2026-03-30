@@ -1,36 +1,52 @@
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 
 import argparse
-import numpy as np
-import itertools
-import os
-from diffusers import FluxPipeline
-import torch
-import pandas as pd
-from tqdm import tqdm
-import json
-from PIL import PngImagePlugin  # Import PNG plugin to handle metadata
-from datetime import datetime
 import gc
+import itertools
+import json
+from datetime import datetime
+from pathlib import Path
+from types import MethodType
+
+import torch
+import yaml
+from diffusers import FluxPipeline
+from PIL import PngImagePlugin
+from tqdm import tqdm
+
 from patch import apply_patch
 
+MODEL_REPO = "black-forest-labs/FLUX.1-dev"
+DEFAULT_CACHE_DIR = Path("/data1/shared_hf_home/")
+DEFAULT_LORA_PATH = Path(
+    # "/home/sz3684/diffusion/reorder_local_attention/HilbertA/reloc_attention/lora/checkpoint-79"
+    "/home/sz3684/diffusion/reorder_local_attention/triton_version/reloc_attention/lora_weight/ckpt_2048_16/checkpoint-2817/"
+)
+
 def clean_memory():
-    """Utility function to clean up GPU memory after every generation."""
+    """Release cached GPU memory after each generation."""
     torch.cuda.empty_cache()
     gc.collect()
+
 
 def generate_image(
     pipeline,
     output_folder,
-    index="warmup",
-    prompt="default",
-    random_seed=42,
+    *,
+    prompt,
+    random_seed,
+    num_tiles,
+    num_steps,
+    device,
+    remark,
     height=768,
     width=768,
-    num_tiles=64,
+    guidance_scale=7.5,
+    max_sequence_length=512,
+    save_image=True,
 ):
-    print("\n")
-
+    """Run a single pipeline call and optionally persist the PNG output."""
     apply_patch(
         pipeline,
         num_tiles=num_tiles,
@@ -43,159 +59,254 @@ def generate_image(
     end_event = torch.cuda.Event(enable_timing=True)
     start_event.record()
 
-    stable_diffusion_output = pipeline(
+    diffusion_output = pipeline(
         prompt=prompt,
         height=height,
         width=width,
         generator=generator,
-        guidance_scale=7.5,
-        num_inference_steps=num_of_inference_steps,
-        max_sequence_length=512,
+        guidance_scale=guidance_scale,
+        num_inference_steps=num_steps,
+        max_sequence_length=max_sequence_length,
     )
-    image = stable_diffusion_output.images[0]
+    image = diffusion_output.images[0]
 
     end_event.record()
     torch.cuda.synchronize()
     elapsed_time = start_event.elapsed_time(end_event) * 1e-3
 
-    if index == "warmup":
-        return None
+    file_name = None
+    if save_image:
+        output_folder.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%m-%d-%H-%M-%S")
+        file_name = f"{timestamp}*{remark}.png"
+        image_path = output_folder / file_name
 
-    os.makedirs(output_folder, exist_ok=True)
+        metadata = PngImagePlugin.PngInfo()
+        metadata.add_text(
+            "Metadata",
+            json.dumps(
+                {
+                    "Prompt": prompt,
+                    "Seed": random_seed,
+                    "Elapsed_Time": elapsed_time,
+                }
+            ),
+        )
 
-    file_name = f"{datetime.now().strftime('%m-%d-%H-%M-%S')}*{remark}.png"
-    image_path = os.path.join(output_folder, file_name)
-
-    metadata_dict = {
-        "Prompt": prompt,
-        "Seed": random_seed,
-        "Elapsed_Time": elapsed_time,
-    }
-
-    metadata_json = json.dumps(metadata_dict)
-
-    metadata = PngImagePlugin.PngInfo()
-    metadata.add_text("Metadata", metadata_json)
-
-    image.save(image_path, "PNG", pnginfo=metadata)
+        image.save(image_path, "PNG", pnginfo=metadata)
 
     clean_memory()
     return elapsed_time, file_name
+
 
 def evaluate_dst_selection(
     pipeline,
     output_folder,
     prompt_list,
     seed_list,
+    *,
     num_tiles,
-    warm_up=True,
+    num_steps,
+    device,
+    remark,
+    height=1024,
+    width=1024,
+    warmup_runs=0,
+    profiler=None,
 ):
+    """Generate images for every prompt/seed combination and record timing."""
+    warmup_seed = seed_list[0] if seed_list else 42
+    for _ in range(warmup_runs):
+        generate_image(
+            pipeline=pipeline,
+            output_folder=output_folder,
+            prompt="warmup",
+            random_seed=warmup_seed,
+            num_tiles=num_tiles,
+            num_steps=num_steps,
+            device=device,
+            remark=remark,
+            height=height,
+            width=width,
+            save_image=False,
+        )
+        if profiler is not None:
+            profiler.step()
 
-    if warm_up:
-        for _ in range(3):
-            generate_image(pipeline, output_folder)
-
-    configurations = itertools.product(
-        prompt_list, seed_list
-    )
+    configurations = itertools.product(prompt_list, seed_list)
+    total = len(prompt_list) * len(seed_list)
     results = []
 
-    for index, (prompt, seed) in tqdm(
-        enumerate(configurations), desc="Processing configurations"
+    for prompt, seed in tqdm(
+        configurations, total=total, desc="Processing configurations"
     ):
-        merge_method = "attention"
-        
         torch.cuda.reset_peak_memory_stats()
         elapsed_time, file_name = generate_image(
             pipeline=pipeline,
             output_folder=output_folder,
-            index=index,
             prompt=prompt,
             random_seed=seed,
-            height=1024,
-            width=1024,
             num_tiles=num_tiles,
+            num_steps=num_steps,
+            device=device,
+            remark=remark,
+            height=height,
+            width=width,
         )
+        if profiler is not None:
+            profiler.step()
         current_memory = torch.cuda.memory_allocated()
         peak_memory = torch.cuda.max_memory_allocated()
-        print(f"Current memory: {current_memory / 1048576:.2f}MiB, Peak memory: {peak_memory / 1048576:.2f}MiB")
+        print(
+            f"Current memory: {current_memory / 1048576:.2f}MiB, "
+            f"Peak memory: {peak_memory / 1048576:.2f}MiB"
+        )
 
-        results.append(elapsed_time)
+        results.append(
+            {
+                "prompt": prompt,
+                "seed": seed,
+                "elapsed_time": elapsed_time,
+                "file_name": file_name,
+                "current_memory": current_memory,
+                "peak_memory": peak_memory,
+            }
+        )
 
-if __name__ == "__main__":
-    # Argument parser setup
-    import argparse
-    import yaml
-    import torch
-    import shutil
-    from pathlib import Path
+    return results
 
-    def load_config(config_path):
-        """Load configuration from YAML file"""
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        return config
 
+def load_config(config_path):
+    with open(config_path, "r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate images with different configurations."
     )
-
     parser.add_argument(
-        "--config", 
+        "--config",
         type=str,
-        default= None,
-        help="Path to configuration YAML file"
+        default=None,
+        help="Path to configuration YAML file",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    # Load configuration from YAML
-    config = load_config(args.config)
 
-    # Process parameters
-    num_tiles = config['num_tiles']
-    prompt_list = config['prompt_list']
-    seed_list = config['seed_list']
-    num_of_inference_steps = config['num_of_inference_steps']
-    remark = config['remark']
-    output_folder = config['output_folder']
+def prepare_pipeline(device, cache_dir=None, lora_path=None):
+    kwargs = {"torch_dtype": torch.bfloat16, "local_files_only": True}
+    if cache_dir:
+        kwargs["cache_dir"] = str(cache_dir)
+    
+    pipeline = FluxPipeline.from_pretrained(MODEL_REPO, **kwargs).to(device)
+    
+    from masking_utils import customized_forward
+    # from reorder_utils_sliding  import customized_forward
+    pipeline.transformer.forward = MethodType(customized_forward, pipeline.transformer)
+    
+    if lora_path:
+        pipeline.load_lora_weights(str(lora_path))
+    
+    return pipeline
 
-    os.makedirs(output_folder, exist_ok=True)
 
-    toma_variant = None
-    dst_method = None
-    merge_step = None
-    recompute_step = None
+def main():
+    args = parse_args()
+    default_config_path = Path(__file__).with_name("config.yaml")
+    config_path = Path(args.config) if args.config else default_config_path
+    config = load_config(config_path)
 
-    prompt_list = prompt_list
-    seed_list = seed_list
-    dst_method = dst_method
-    output_folder = output_folder
-    results_file_path = f"time.md"
+    curve_type = (config.get("curve_type") or "hilbert").lower()
+    output_folder = Path(config["output_folder"]) / curve_type
+    output_folder.mkdir(parents=True, exist_ok=True)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
+    print(f"Curve type: {curve_type}")
+    print(f"Output directory: {output_folder}")
 
-    pipeline = FluxPipeline.from_pretrained(
-        "black-forest-labs/FLUX.1-dev",
-        torch_dtype=torch.bfloat16,
-        cache_dir="/scratch/sz3684/.cache/",
-        local_files_only=True,
-    ).to(device)
+    cache_dir_value = config.get("cache_dir", DEFAULT_CACHE_DIR)
+    cache_dir = Path(cache_dir_value) if cache_dir_value else None
 
-    import types
-    from masking_utils import customized_call
-    from masking_utils import customized_forward
-    # from reorder_utils import customized_forward
-
-    # pipeline.customized_call = types.MethodType(customized_call, pipeline)
-    pipeline.transformer.forward = types.MethodType(customized_forward, pipeline.transformer)
-
-    pipeline.load_lora_weights("/scratch/sz3684/HilbertA/reorder_local_attention/reloc_attention/lora/checkpoint-2400")
-
-    evaluate_dst_selection(
-        pipeline=pipeline,
-        output_folder=output_folder,
-        prompt_list=prompt_list,
-        seed_list=seed_list,
-        num_tiles=num_tiles,
-        warm_up=False,
+    lora_path_value = config.get("lora_weight_path", DEFAULT_LORA_PATH)
+    lora_path = Path(lora_path_value) if lora_path_value else None
+    pipeline = prepare_pipeline(
+        device=device,
+        cache_dir=cache_dir,
+        lora_path=lora_path,
     )
+
+    # Optional PyTorch profiler
+    enable_profiler = bool(config.get("enable_profiler", False))
+    print(f"Profiler enabled: {enable_profiler}")
+    if enable_profiler:
+        activities = [
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ]
+        # Create a deterministic logs directory next to this file
+        logs_dir = Path(__file__).with_name("profiler_logs")
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        # Make the profiler fire immediately to guarantee output even with few steps
+        schedule = torch.profiler.schedule(wait=0, warmup=3, active=1, repeat=1)
+        handler = torch.profiler.tensorboard_trace_handler(str(logs_dir))
+        print(f"Starting profiler with TensorBoard logging to {logs_dir}")
+        with torch.profiler.profile(
+            activities=activities,
+            schedule=schedule,
+            on_trace_ready=handler,
+            record_shapes=False,  
+            with_stack=True,     
+            profile_memory=False, 
+        ) as prof:
+            print("Profiler context started")
+            results = evaluate_dst_selection(
+                pipeline=pipeline,
+                output_folder=output_folder,
+                prompt_list=config["prompt_list"],
+                seed_list=config["seed_list"],
+                num_tiles=config["num_tiles"],
+                num_steps=config["num_of_inference_steps"],
+                device=device,
+                remark=config["remark"],
+                height=config.get("height", 1024),
+                width=config.get("width", 1024),
+                warmup_runs=config.get("warmup_runs", 0),
+                profiler=prof,
+            )
+            # Ensure at least one step is recorded and export a chrome trace as a fallback
+            try:
+                prof.step()
+            except Exception:
+                pass
+            try:
+                prof.export_chrome_trace(str(logs_dir / "trace.json"))
+            except Exception:
+                pass
+    else:
+        prompt_list = config["prompt_list"]
+
+        results = evaluate_dst_selection(
+            pipeline=pipeline,
+            output_folder=output_folder,
+            prompt_list=prompt_list,
+            seed_list=config["seed_list"],
+            num_tiles=config["num_tiles"],
+            num_steps=config["num_of_inference_steps"],
+            device=device,
+            remark=config["remark"],
+            height=config.get("height", 1024),
+            width=config.get("width", 1024),
+            warmup_runs=config.get("warmup_runs", 0),
+        )
+
+    if results:
+        elapsed_times = [result["elapsed_time"] for result in results if result["elapsed_time"] is not None]
+        if elapsed_times:
+            avg_time = sum(elapsed_times) / len(elapsed_times)
+            print(f"Average generation time: {avg_time:.2f}s")
+
+
+if __name__ == "__main__":
+    main()

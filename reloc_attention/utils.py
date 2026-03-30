@@ -282,5 +282,45 @@ def get_inverse_hilbert_indices(p: int) -> torch.Tensor:
     inverse[hilbert] = torch.arange(hilbert.numel(), device=hilbert.device)
     return inverse
 
+def get_morton_flat_indices(order):
+    """
+    Returns: tensor[int] of shape [2^(2*order)]
+    Morton order = Z-order of a 2^order x 2^order grid
+    """
+    size = 2 ** order
+    num = size * size
 
+    morton = torch.zeros(num, dtype=torch.long)
 
+    def part1by1(n):
+        n &= 0x0000ffff
+        n = (n | (n << 8)) & 0x00FF00FF
+        n = (n | (n << 4)) & 0x0F0F0F0F
+        n = (n | (n << 2)) & 0x33333333
+        n = (n | (n << 1)) & 0x55555555
+        return n
+
+    def morton2D(x, y):
+        return (part1by1(y) << 1) | part1by1(x)
+
+    idx = 0
+    for y in range(size):
+        for x in range(size):
+            morton[idx] = morton2D(x, y)
+            idx += 1
+
+    sorted_indices = torch.argsort(morton)
+    return sorted_indices
+
+def get_inverse_morton_indices(p: int) -> torch.Tensor:
+    """
+    Returns: inverse Morton index map.
+    If morton[i] = k, then inverse[k] = i.
+    """
+    morton = get_morton_flat_indices(p)                   # forward Morton order
+    inverse = torch.empty_like(morton)                    # same shape
+
+    inv = torch.arange(morton.numel(), device=morton.device)
+    inverse[morton] = inv                                 # reverse mapping
+
+    return inverse

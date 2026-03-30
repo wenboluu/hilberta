@@ -7,12 +7,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from contextlib import contextmanager
-
-@contextmanager
-def profile_range(name: str):
-    with torch.profiler.record_function(name):
-        yield
 
 from diffusers.utils import USE_PEFT_BACKEND, is_torch_version, logging, scale_lora_layers, unscale_lora_layers
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
@@ -76,7 +70,6 @@ def _base_inverse_hilbert_indices(sequence_length: int) -> torch.Tensor:
         return get_inverse_hilbert_indices(7)
     raise ValueError(f"Unsupported sequence_length {sequence_length} for Hilbert ordering")
 
-
 _DEVICE_INDEX_CACHE: Dict[Tuple[int, torch.device], torch.Tensor] = {}
 _DEVICE_INVERSE_CACHE: Dict[Tuple[int, torch.device], torch.Tensor] = {}
 
@@ -88,7 +81,6 @@ def _get_index_on_device(sequence_length: int, device: torch.device) -> torch.Te
         cached = _base_hilbert_indices(sequence_length).to(device, non_blocking=True)
         _DEVICE_INDEX_CACHE[key] = cached
     return cached
-
 
 def _get_inverse_on_device(sequence_length: int, device: torch.device) -> torch.Tensor:
     key = (sequence_length, device)
@@ -192,53 +184,6 @@ def recover_hilbert_reorder(image_rotary_emb, hidden_states, num_tiles, offset=0
 
     return image_rotary_emb, hidden_states
 
-def apply_circular_shift(hidden_states, offset):
-    """
-    Apply circular shift to hidden_states for offset effect.
-    
-    Args:
-        hidden_states: [B * num_tiles, seq_len, C]
-        offset: number of positions to shift
-    
-    Returns:
-        shifted hidden_states
-    """
-    if offset == 0:
-        return hidden_states
-    
-    return torch.roll(hidden_states, shifts=offset, dims=1)
-
-def apply_circular_shift_to_rotary_emb(image_rotary_emb, offset):
-    """
-    Apply circular shift to the image part of rotary embeddings.
-    
-    Args:
-        image_rotary_emb: tuple of (emb_1, emb_2), each of shape [512 + image_len, dim]
-        offset: number of positions to shift
-    
-    Returns:
-        shifted rotary embeddings
-    """
-    if offset == 0:
-        return image_rotary_emb
-        
-    image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
-    
-    # Split text and image parts
-    text_emb_1, image_emb_1 = image_rotary_emb_1[:512], image_rotary_emb_1[512:]
-    text_emb_2, image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
-    
-    # Apply circular shift to image parts
-    shifted_image_emb_1 = torch.roll(image_emb_1, shifts=offset, dims=0)
-    shifted_image_emb_2 = torch.roll(image_emb_2, shifts=offset, dims=0)
-    
-    # Recombine
-    new_emb_1 = torch.cat([text_emb_1, shifted_image_emb_1], dim=0)
-    new_emb_2 = torch.cat([text_emb_2, shifted_image_emb_2], dim=0)
-    
-    return (new_emb_1, new_emb_2)
-
-
 
 def customized_forward(
     self,
@@ -261,6 +206,10 @@ def customized_forward(
             config = yaml.safe_load(f)
         return config
     
+    config = load_config("/home/sz3684/diffusion/reorder_local_attention/triton_version/reloc_attention/config.yaml")
+
+    num_tiles = config['num_tiles'] if 'num_tiles' in config else 16
+
     if joint_attention_kwargs is not None:
         joint_attention_kwargs = joint_attention_kwargs.copy()
         lora_scale = joint_attention_kwargs.pop("scale", 1.0)
@@ -289,88 +238,58 @@ def customized_forward(
     )
     encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
+    if txt_ids.ndim == 3:
+        logger.warning(
+            "Passing `txt_ids` 3d torch.Tensor is deprecated."
+            "Please remove the batch dimension and pass it as a 2d torch Tensor"
+        )
+        txt_ids = txt_ids[0]
+    if img_ids.ndim == 3:
+        logger.warning(
+            "Passing `img_ids` 3d torch.Tensor is deprecated."
+            "Please remove the batch dimension and pass it as a 2d torch Tensor"
+        )
+        img_ids = img_ids[0]
+
     ids = torch.cat((txt_ids, img_ids), dim=0)
     image_rotary_emb = self.pos_embed(ids)
     B, N, C = hidden_states.shape
 
-    num_tiles = 4
-    cycle = 4
-    counter = 0
-
     # Apply initial Hilbert reordering once
-    with profile_range("Hilbert_Reorder_Initial"):
-        image_rotary_emb, hidden_states = apply_hilbert_reorder(
-            image_rotary_emb, hidden_states, num_tiles, offset = 0
-        )
-
-    off_set_unit = (N//num_tiles)//cycle
-
-    with profile_range("Transformer_Blocks"):
-        for index_block, block in enumerate(self.transformer_blocks):
-            with profile_range(f"TransformerBlock_{index_block}"):
-                # Apply circular shift to both hidden_states and rotary_emb
-                with profile_range("Circular_Shift"):
-                    hidden_states = apply_circular_shift(hidden_states, off_set_unit)
-                    image_rotary_emb = apply_circular_shift_to_rotary_emb(image_rotary_emb, off_set_unit)
-
-                # # # Entering the block
-                with profile_range("Block_Forward"):
-                    encoder_hidden_states, hidden_states = block(
-                        hidden_states=hidden_states,
-                        encoder_hidden_states=encoder_hidden_states,
-                        temb=temb,
-                        image_rotary_emb=image_rotary_emb,
-                        joint_attention_kwargs=joint_attention_kwargs,
-                    )
-                counter += 1
-
-    with profile_range("Single_Transformer_Blocks"):
-        for index_block, block in enumerate(self.single_transformer_blocks):
-            with profile_range(f"SingleTransformerBlock_{index_block}"):
-                # Apply circular shift to both hidden_states and rotary_emb
-                with profile_range("Circular_Shift"):
-                    hidden_states = apply_circular_shift(hidden_states, off_set_unit)
-                    image_rotary_emb = apply_circular_shift_to_rotary_emb(image_rotary_emb, off_set_unit)
-
-                with profile_range("Cat_Hidden_States"):
-                    hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
-
-                # # # Entering the block
-                with profile_range("Block_Forward"):
-                    hidden_states = block(
-                        hidden_states=hidden_states,
-                        temb=temb,
-                        image_rotary_emb=image_rotary_emb,
-                        joint_attention_kwargs=joint_attention_kwargs,
-                    )
-
-                with profile_range("Split_Hidden_States"):
-                    encoder_hidden_states, hidden_states = hidden_states[:, :encoder_hidden_states.shape[1], :], hidden_states[:, encoder_hidden_states.shape[1]:, :]
-                counter += 1
-
-    # Apply final recovery: first reverse all accumulated shifts, then untile
-    total_shifts = counter * off_set_unit
-    effective_shift = total_shifts % hidden_states.shape[1]
-
-    # Reverse the accumulated circular shifts for both hidden_states and rotary_emb
-    if effective_shift > 0:
-        reverse_shift = hidden_states.shape[1] - effective_shift
-        hidden_states = apply_circular_shift(hidden_states, reverse_shift)
-        image_rotary_emb = apply_circular_shift_to_rotary_emb(image_rotary_emb, reverse_shift)
- 
-    # Now recover with no offset since we've already reversed the shifts
-    image_rotary_emb, hidden_states = recover_hilbert_reorder(
+    image_rotary_emb, hidden_states = apply_hilbert_reorder(
         image_rotary_emb, hidden_states, num_tiles, offset = 0
     )
 
-    # hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
+    for index_block, block in enumerate(self.transformer_blocks):
 
-    # hidden_states = hidden_states[:, encoder_hidden_states.shape[1]:, :]
+        # # # Entering the block
+        encoder_hidden_states, hidden_states = block(
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            temb=temb,
+            image_rotary_emb=image_rotary_emb,
+            joint_attention_kwargs=joint_attention_kwargs,
+        )
+
+    hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
+
+    for index_block, block in enumerate(self.single_transformer_blocks):
+        # # # Entering the block
+        hidden_states = block(
+            hidden_states=hidden_states,
+            temb=temb,
+            image_rotary_emb=image_rotary_emb,
+            joint_attention_kwargs=joint_attention_kwargs,
+        )
+
+    hidden_states = hidden_states[:, encoder_hidden_states.shape[1]:, :]
+    image_rotary_emb, hidden_states = recover_hilbert_reorder(
+        image_rotary_emb, hidden_states, num_tiles, offset = 0
+    )
     hidden_states = hidden_states.reshape(B, -1, C)
     
     hidden_states = self.norm_out(hidden_states, temb)
     output = self.proj_out(hidden_states)
-    # output = hilbert_untile(output, offset = off_set_counter)
 
     if USE_PEFT_BACKEND:
         # remove `lora_scale` from each PEFT layer

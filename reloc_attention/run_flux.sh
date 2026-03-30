@@ -11,7 +11,7 @@ set -e
 : "${CUDA_VISIBLE_DEVICES:=}"
 
 # Set the base directory
-BASE_DIR="/scratch/sz3684/HilbertA/reorder_local_attention/reloc_attention/"
+BASE_DIR="/home/sz3684/diffusion/reorder_local_attention/HilbertA/reloc_attention"
 
 # Default config path
 CONFIG_PATH="${BASE_DIR}/config.yaml"
@@ -22,25 +22,29 @@ if [ ! -f "$CONFIG_PATH" ]; then
     exit 1
 fi
 
-# Check if mask_list directory exists and create masks if needed
-# if [ ! -d "${BASE_DIR}/mask_list" ] || [ -z "$(ls -A ${BASE_DIR}/mask_list 2>/dev/null)" ]; then
-#     echo "mask_list directory not found or empty, creating masks..."
-#     "${BASE_DIR}/penv/bin/python" "${BASE_DIR}/create_mask.py"
-# else
-#     echo "mask_list directory exists and contains files, skipping mask creation"
-# fi
+# Determine curve type and mask dir from config
+CURVE_TYPE="$(${HOME}/miniconda3/envs/flux_img_editing/bin/python -c 'import yaml,sys; cfg=yaml.safe_load(open(sys.argv[1])); print((cfg.get("curve_type") or "hilbert").lower())' "$CONFIG_PATH")"
+MASK_DIR="${BASE_DIR}/mask_${CURVE_TYPE}"
 
-# Always create masks
-echo "Creating masks..."
-"${BASE_DIR}/penv/bin/python" "${BASE_DIR}/pattern_utils.py"
-"${BASE_DIR}/penv/bin/python" "${BASE_DIR}/create_mask.py"
+# Check if mask_{curve_type} directory exists and create masks if needed
+if [ ! -d "${MASK_DIR}" ] || [ -z "$(ls -A ${MASK_DIR} 2>/dev/null)" ]; then
+    echo "Mask dir ${MASK_DIR} (curve=${CURVE_TYPE}) not found or empty, creating masks..."
+    ${HOME}/miniconda3/envs/flux_img_editing/bin/python "${BASE_DIR}/create_mask.py"
+else
+    echo "Mask dir ${MASK_DIR} (curve=${CURVE_TYPE}) exists and contains files, skipping mask creation"
+fi
+
+# # Always create masks
+# echo "Creating masks..."
+# ~/miniconda3/envs/flux_img_editing/bin/python "${BASE_DIR}/pattern_utils.py"
+# ~/miniconda3/envs/flux_img_editing/bin/python "${BASE_DIR}/create_mask.py"
 
 # Run the script with timestamp
 echo "Starting run_flux.py"
 echo "Using config file: $CONFIG_PATH"
 
 # Run the Python script with the project environment's Python
-"${BASE_DIR}/penv/bin/python" "${BASE_DIR}/run_flux.py" \
+~/miniconda3/envs/flux_img_editing/bin/python "${BASE_DIR}/run_flux.py" \
     --config "$CONFIG_PATH"
 
 # Check if the script ran successfully

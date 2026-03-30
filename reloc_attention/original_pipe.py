@@ -74,7 +74,7 @@ def main() -> None:
             schedule=schedule,
             on_trace_ready=handler,
             record_shapes=False,
-            with_stack=False,
+            with_stack=True,
             profile_memory=False,
         ) as prof:
             for prompt in PROMPT_LIST:

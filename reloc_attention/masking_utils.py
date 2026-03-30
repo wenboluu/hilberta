@@ -10,7 +10,7 @@ import os
 import glob
 from diffusers.utils import USE_PEFT_BACKEND, is_torch_version, logging, scale_lora_layers, unscale_lora_layers
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
-from utils import get_hilbert_flat_indices
+from utils import get_hilbert_flat_indices, get_morton_flat_indices
 import numpy as np
 from typing import Callable, List, Union, Optional, Dict
 import torch
@@ -25,20 +25,6 @@ def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
     elif x.shape[1] == 16384:
         hilbert_index = get_hilbert_flat_indices(7).to(x.device)
 
-    ################################# Make complete hilbert index #################################
-    index = torch.arange(hilbert_index.numel()).to(x.device)    
-    cut_off = index.shape[0] // 4
-
-    hilbert_x = torch.gather(index, dim=0, index=hilbert_index)
-    hilbert_x_half = hilbert_x[cut_off:-cut_off]
-
-    x_flip = index.flip(0)
-    hilbert_x_flip = torch.gather(x_flip, dim=0, index=hilbert_index)
-    hilbert_x_half_flip = hilbert_x_flip[cut_off:-cut_off]
-
-    hilbert_index = torch.cat([hilbert_x_half, hilbert_x_half_flip])
-    ################################# Make complete hilbert index #################################
-
     hilbert_index = torch.cat([hilbert_index[offset:], hilbert_index[:offset]])
     hilbert_index = hilbert_index.reshape(num_of_tiles, -1)
 
@@ -50,9 +36,6 @@ def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
         tensor_i = tensor.view(B, N, 1)  # Shape: [B, N, 1]
         tensor_j = tensor.view(B, 1, N)  # Shape: [B, 1, N]
         
-        # Broadcast to create all pairs
-        # This expands tensor_i along the last dimension and tensor_j along the middle dimension
-        # Creating a grid of all combinations for each batch
         i_grid = tensor_i.expand(B, N, N)  # Shape: [B, N, N]
         j_grid = tensor_j.expand(B, N, N)  # Shape: [B, N, N]
         
@@ -82,28 +65,63 @@ def create_hilbert_tile_mask(x, num_of_tiles, offset=0):
             mask[start:end, :] = 0.0
             mask[:, start:end] = 0.0
 
-        corner_size = 4
-        seq_len = 4096
-
-        index = torch.load(f'./indices_{x.shape[1]}_{x.shape[1]//16}.pt')
-        if index is not None:
-            index = torch.tensor(index, device=x.device)
-            mask.index_fill_(0, index, 0.0)
-            mask.index_fill_(1, index, 0.0)
     elif x.shape[1] == 16384:
-        # for i in range(48, 80):
-        #     start = i*128 + 48
-        #     end = i*128 + 80
-        #     mask[start:end, :] = 0.0
-        #     mask[:, start:end] = 0.0
-
-        index = torch.load(f'./indices_{x.shape[1]}_{x.shape[1]//16}.pt')
-        if index is not None:
-            index = torch.tensor(index, device=x.device)
-            mask.index_fill_(0, index, 0.0)
-            mask.index_fill_(1, index, 0.0)
-    # print the number of entry which equals to 0
+        for i in range(48, 80):
+            start = i*128 + 48
+            end = i*128 + 80
+            mask[start:end, :] = 0.0
+            mask[:, start:end] = 0.0
     return mask
+
+def create_morton_tile_mask(x, num_of_tiles, offset=0):
+    """
+    Morton curve version (Z-order curve) of your tile-dependency mask.
+    """
+    if x.shape[1] == 4096:
+        morton_index = get_morton_flat_indices(6).to(x.device)
+    elif x.shape[1] == 16384:
+        morton_index = get_morton_flat_indices(7).to(x.device)
+    else:
+        raise ValueError("Unsupported sequence length")
+
+    # offset rotation
+    morton_index = torch.cat([morton_index[offset:], morton_index[:offset]])
+    morton_index = morton_index.reshape(num_of_tiles, -1)
+
+    def get_all_pairs_batched_parallel(tensor):
+        B, N = tensor.shape        
+        tensor_i = tensor.view(B, N, 1)
+        tensor_j = tensor.view(B, 1, N)
+        i_grid = tensor_i.expand(B, N, N)
+        j_grid = tensor_j.expand(B, N, N)
+        pairs = torch.stack([i_grid, j_grid], dim=-1)
+        pairs = pairs.view(B, N*N, 2)
+        return pairs
+
+    pairs = get_all_pairs_batched_parallel(morton_index)
+    pairs = pairs.reshape(-1, 2)
+
+    seq_len = morton_index.numel()
+
+    mask = torch.full((seq_len, seq_len), float('-inf'), device=x.device)
+    mask[pairs[:, 0], pairs[:, 1]] = 0.0
+
+    if x.shape[1] == 4096:
+        for i in range(24, 40):
+            start = i*64 + 24
+            end = i*64 + 40
+            mask[start:end, :] = 0.0
+            mask[:, start:end] = 0.0
+
+    elif x.shape[1] == 16384:
+        for i in range(48, 80):
+            start = i*128 + 48
+            end = i*128 + 80
+            mask[start:end, :] = 0.0
+            mask[:, start:end] = 0.0
+
+    return mask
+
 
 
 def customized_forward(
