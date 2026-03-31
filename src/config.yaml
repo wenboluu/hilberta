@@ -13,6 +13,10 @@ attention:
   full_attn_step: []
   full_attn_layer: []
 
+seam:
+  enabled: true
+  band: 1
+
 lora:
   enabled: true
   path: "./lora_weight/ckpt_1024_16/checkpoint-2817"

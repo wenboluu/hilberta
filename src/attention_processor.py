@@ -14,6 +14,8 @@ with open('./src/config.yaml', 'r') as f:
 num_of_tiles = _config['tiling']['num_tiles']
 full_attn_step = _config['attention']['full_attn_step']
 full_attn_layer = _config['attention']['full_attn_layer']
+enable_seam = _config.get('seam', {}).get('enabled', False)
+seam_band = _config.get('seam', {}).get('band', 1)
 
 # Load precomputed Hilbert-curve attention masks
 _mask_dir = './masks'
@@ -55,9 +57,11 @@ def _compute_seam_mask(H, W, vertical_seams, horizontal_seams, band=1):
 
 
 # 64x64 latent grid (1024px images), 4 tiles -> seams at columns 16,32,48 and row 32
-seam_mask_4096 = _compute_seam_mask(
-    64, 64, vertical_seams=[16, 32, 48], horizontal_seams=[32], band=1
-).cuda()
+seam_mask_4096 = None
+if enable_seam:
+    seam_mask_4096 = _compute_seam_mask(
+        64, 64, vertical_seams=[16, 32, 48], horizontal_seams=[32], band=seam_band
+    ).cuda()
 
 
 class HilbertaAttnProcessor:
@@ -128,7 +132,7 @@ class HilbertaAttnProcessor:
         if step not in full_attn_step and layer_idx not in full_attn_layer:
             tile_mask = masks[f'{image_size}_{offset}_{num_of_tiles}'].to(query.device)
             attn_mask[-image_size:, -image_size:] = tile_mask
-            if image_size == 4096:
+            if enable_seam and image_size == 4096 and seam_mask_4096 is not None:
                 attn_mask[-image_size:, -image_size:] |= seam_mask_4096
 
         hidden_states = F.scaled_dot_product_attention(
