@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from diffusers.utils import USE_PEFT_BACKEND, is_torch_version, logging, scale_lora_layers, unscale_lora_layers
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from utils import get_hilbert_flat_indices, get_inverse_hilbert_indices
-logger = logging.get_logger(__name__) 
+logger = logging.get_logger(__name__)
 
 
 
@@ -30,7 +30,7 @@ def tile(x, num_tiles):
     x_reshaped = x_reshaped.reshape(-1, tile_side_len**2, C)
     x_reshaped = x_reshaped.reshape(B, HW, C).contiguous()
 
-    return x_reshaped 
+    return x_reshaped
 
 def untile(x_tiled, num_tiles):
     """
@@ -114,19 +114,21 @@ def hilbert_untile(x_hilbert, offset=0):
 def apply_hilbert_reorder(image_rotary_emb, hidden_states, num_tiles, offset = 0):
     """
     Reorders the image part of rotary embeddings and hidden states using Hilbert curve,
-    tiles them for each image patch, and prepares them for model input.
- 
+    separating center shared region from sparse region.
+
+    The center region is treated as globally-attentive (shared with text tokens),
+    while the remaining sparse tokens use local attention with Hilbert reordering.
+
     Args:
         image_rotary_emb (tuple of torch.Tensor): Tuple of (rotary_emb_1, rotary_emb_2),
             each of shape [512 + H*W, dim], where 512 is text embedding and the rest is image.
         hidden_states (torch.Tensor): Input hidden states of shape [B, N, C], where N = H * W.
-        encoder_hidden_states (torch.Tensor): Encoder context, shape [1, seq_len, C] or [B, seq_len, C].
         num_tiles (int): Number of spatial tiles to split image into (e.g., 16 for 4x4).
+        offset (int): Hilbert curve offset for sliding window.
 
     Returns:
-        image_rotary_emb: Tuple of reordered and tiled rotary embeddings
-        hidden_states: Reordered and reshaped hidden states [B * num_tiles, tile_len, C]
-        encoder_hidden_states: Tiled encoder hidden states [B * num_tiles, ..., C]
+        image_rotary_emb: Tuple of reordered rotary embeddings [text, center, sparse]
+        hidden_states: Reordered hidden states [B, center+sparse, C]
     """
     image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
 
@@ -134,37 +136,88 @@ def apply_hilbert_reorder(image_rotary_emb, hidden_states, num_tiles, offset = 0
     text_emb_1, image_emb_1 = image_rotary_emb_1[:512], image_rotary_emb_1[512:]
     text_emb_2, image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
 
-    # Tile and reorder image embeddings with Hilbert curve
-    tiled_image_emb_1 = hilbert_tile(image_emb_1.unsqueeze(0), offset).squeeze(0)
-    tiled_image_emb_2 = hilbert_tile(image_emb_2.unsqueeze(0), offset).squeeze(0)
+    # Determine center region size based on sequence length
+    # This matches the center region defined in masking_utils.py
+    sequence_length = hidden_states.shape[1]
+    if sequence_length == 4096:
+        H = W = 64
+        center_start, center_end = 24, 40
+        center_size = 16 * 16  # 256
+    elif sequence_length == 16384:
+        H = W = 128
+        center_start, center_end = 48, 80
+        center_size = 32 * 32  # 1024
+    else:
+        raise ValueError(f"Unsupported sequence length: {sequence_length}")
 
-    image_rotary_emb_1 = torch.cat([text_emb_1, tiled_image_emb_1], dim=0)
-    image_rotary_emb_2 = torch.cat([text_emb_2, tiled_image_emb_2], dim=0)
+    # Extract center region indices (rows 24-40, cols 24-40 for 4096)
+    center_indices = []
+    for i in range(center_start, center_end):
+        for j in range(center_start, center_end):
+            center_indices.append(i * W + j)
+    center_indices = torch.tensor(center_indices, device=hidden_states.device)
 
-    image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
+    # Create mask for non-center (sparse) tokens
+    all_indices = torch.arange(sequence_length, device=hidden_states.device)
+    is_center = torch.zeros(sequence_length, dtype=torch.bool, device=hidden_states.device)
+    is_center[center_indices] = True
+    sparse_indices = all_indices[~is_center]
 
-    # Reorder hidden states
-    hidden_states = hilbert_tile(hidden_states, offset)
+    # Extract center and sparse tokens
+    center_hidden = hidden_states[:, center_indices, :]
+    sparse_hidden = hidden_states[:, sparse_indices, :]
 
-    return image_rotary_emb, hidden_states
+    center_emb_1 = image_emb_1[center_indices, :]
+    sparse_emb_1 = image_emb_1[sparse_indices, :]
+
+    center_emb_2 = image_emb_2[center_indices, :]
+    sparse_emb_2 = image_emb_2[sparse_indices, :]
+
+    # Apply Hilbert reorder to sparse tokens
+    # Get full Hilbert indices for the entire image
+    full_hilbert_index = _get_index_on_device(sequence_length, hidden_states.device)
+    if offset:
+        full_hilbert_index = torch.remainder(full_hilbert_index - offset, sequence_length)
+
+    # Extract Hilbert indices for sparse positions
+    sparse_hilbert_indices = full_hilbert_index[sparse_indices]
+
+    # Sort to get the reordering: which sparse token goes where
+    sorted_positions = torch.argsort(sparse_hilbert_indices)
+
+    # Reorder sparse tokens according to their Hilbert curve order
+    sparse_hidden = sparse_hidden[:, sorted_positions, :]
+    sparse_emb_1 = sparse_emb_1[sorted_positions, :]
+    sparse_emb_2 = sparse_emb_2[sorted_positions, :]
+
+    # Concatenate in order: [center, sparse]
+    # This creates the sequence: [center(256), sparse(3840)] for 4096
+    reordered_image_hidden = torch.cat([center_hidden, sparse_hidden], dim=1)
+    reordered_image_emb_1 = torch.cat([center_emb_1, sparse_emb_1], dim=0)
+    reordered_image_emb_2 = torch.cat([center_emb_2, sparse_emb_2], dim=0)
+
+    # Concatenate with text embeddings: [text(512), center(256), sparse(3840)] = 4608 total
+    image_rotary_emb_1 = torch.cat([text_emb_1, reordered_image_emb_1], dim=0)
+    image_rotary_emb_2 = torch.cat([text_emb_2, reordered_image_emb_2], dim=0)
+
+    return (image_rotary_emb_1, image_rotary_emb_2), reordered_image_hidden
 
 
 def recover_hilbert_reorder(image_rotary_emb, hidden_states, num_tiles, offset=0):
     """
     Recovers original ordering from Hilbert-tiled embeddings and hidden states.
+    Reverses the [center, sparse] reordering back to original spatial layout.
 
     Args:
         image_rotary_emb (tuple): (image_rotary_emb_1, image_rotary_emb_2),
-            each of shape [num_tiles, seq_len, dim]
-        hidden_states (torch.Tensor): Shape [B * num_tiles, tile_len, C]
-        encoder_hidden_states (torch.Tensor): Shape [B * num_tiles, enc_seq_len, C]
+            each of shape [512 + center + sparse, dim]
+        hidden_states (torch.Tensor): Shape [B, center+sparse, C]
         num_tiles (int): Number of tiles per original batch
         offset (int): Hilbert offset used during tiling
 
     Returns:
         image_rotary_emb: Tuple of [512 + HW, dim] restored rotary embeddings
-        hidden_states: [B, HW, C] recovered hidden states
-        encoder_hidden_states: [B, enc_seq_len, C] recovered encoder context
+        hidden_states: [B, HW, C] recovered hidden states in original spatial order
     """
     image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
 
@@ -172,17 +225,83 @@ def recover_hilbert_reorder(image_rotary_emb, hidden_states, num_tiles, offset=0
     text_emb_1, tiled_image_emb_1 = image_rotary_emb_1[:512], image_rotary_emb_1[512:]
     text_emb_2, tiled_image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
 
-    # Undo Hilbert ordering
-    recovered_image_emb_1 = hilbert_untile(tiled_image_emb_1.unsqueeze(0), offset).squeeze(0)
-    recovered_image_emb_2 = hilbert_untile(tiled_image_emb_2.unsqueeze(0), offset).squeeze(0)
+    # Determine sequence length and center size
+    sequence_length = hidden_states.shape[1]
+    if sequence_length == 4096:
+        H = W = 64
+        center_start, center_end = 24, 40
+        center_size = 16 * 16  # 256
+    elif sequence_length == 16384:
+        H = W = 128
+        center_start, center_end = 48, 80
+        center_size = 32 * 32  # 1024
+    else:
+        raise ValueError(f"Unsupported sequence length: {sequence_length}")
 
+    sparse_size = sequence_length - center_size
+
+    # Split center and sparse parts
+    center_hidden = hidden_states[:, :center_size, :]
+    sparse_hidden = hidden_states[:, center_size:, :]
+
+    center_emb_1 = tiled_image_emb_1[:center_size, :]
+    sparse_emb_1 = tiled_image_emb_1[center_size:, :]
+
+    center_emb_2 = tiled_image_emb_2[:center_size, :]
+    sparse_emb_2 = tiled_image_emb_2[center_size:, :]
+
+    # Create center indices first (needed for sparse indices)
+    center_indices = []
+    for i in range(center_start, center_end):
+        for j in range(center_start, center_end):
+            center_indices.append(i * W + j)
+    center_indices = torch.tensor(center_indices, device=hidden_states.device)
+
+    # Create sparse indices
+    all_indices = torch.arange(sequence_length, device=hidden_states.device)
+    is_center = torch.zeros(sequence_length, dtype=torch.bool, device=hidden_states.device)
+    is_center[center_indices] = True
+    sparse_indices = all_indices[~is_center]
+
+    # Undo Hilbert ordering on sparse tokens
+    # Get full Hilbert indices for the entire image
+    full_hilbert_index = _get_index_on_device(sequence_length, hidden_states.device)
+    if offset:
+        full_hilbert_index = torch.remainder(full_hilbert_index - offset, sequence_length)
+
+    # Extract Hilbert indices for sparse positions
+    sparse_hilbert_indices = full_hilbert_index[sparse_indices]
+
+    # Get inverse sorting to recover original order
+    sorted_positions = torch.argsort(sparse_hilbert_indices)
+    inverse_positions = torch.argsort(sorted_positions)
+
+    # Recover original order of sparse tokens
+    sparse_hidden = sparse_hidden[:, inverse_positions, :]
+    sparse_emb_1 = sparse_emb_1[inverse_positions, :]
+    sparse_emb_2 = sparse_emb_2[inverse_positions, :]
+
+    # Reconstruct full image tensor
+    B, _, C = center_hidden.shape
+    recovered_image_hidden = torch.zeros(B, sequence_length, C, device=hidden_states.device, dtype=hidden_states.dtype)
+    recovered_image_emb_1 = torch.zeros(sequence_length, center_emb_1.shape[1], device=hidden_states.device, dtype=center_emb_1.dtype)
+    recovered_image_emb_2 = torch.zeros(sequence_length, center_emb_2.shape[1], device=hidden_states.device, dtype=center_emb_2.dtype)
+
+    recovered_image_hidden[:, center_indices, :] = center_hidden
+    recovered_image_hidden[:, sparse_indices, :] = sparse_hidden
+
+    recovered_image_emb_1[center_indices, :] = center_emb_1
+    recovered_image_emb_1[sparse_indices, :] = sparse_emb_1
+
+    recovered_image_emb_2[center_indices, :] = center_emb_2
+    recovered_image_emb_2[sparse_indices, :] = sparse_emb_2
+
+    # Concatenate with text embeddings
     image_rotary_emb_1 = torch.cat([text_emb_1, recovered_image_emb_1], dim=0)
     image_rotary_emb_2 = torch.cat([text_emb_2, recovered_image_emb_2], dim=0)
     image_rotary_emb = (image_rotary_emb_1, image_rotary_emb_2)
 
-    hidden_states = hilbert_untile(hidden_states, offset)
-
-    return image_rotary_emb, hidden_states
+    return image_rotary_emb, recovered_image_hidden
 
 
 def customized_forward(
@@ -205,8 +324,11 @@ def customized_forward(
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         return config
-    
-    config = load_config("/scratch/sz3684/HilbertA/reorder_local_attention/reloc_attention/config.yaml")
+
+    # Load config from same directory as this script
+    import os as _os
+    _script_dir = _os.path.dirname(_os.path.abspath(__file__))
+    config = load_config(_os.path.join(_script_dir, "config.yaml"))
 
     num_tiles = config['num_tiles'] if 'num_tiles' in config else 16
 
@@ -255,7 +377,7 @@ def customized_forward(
     image_rotary_emb = self.pos_embed(ids)
     B, N, C = hidden_states.shape
 
-    # Apply initial Hilbert reordering once
+    # Apply initial Hilbert reordering with center/sparse separation
     image_rotary_emb, hidden_states = apply_hilbert_reorder(
         image_rotary_emb, hidden_states, num_tiles, offset = 0
     )
@@ -287,7 +409,7 @@ def customized_forward(
         image_rotary_emb, hidden_states, num_tiles, offset = 0
     )
     hidden_states = hidden_states.reshape(B, -1, C)
-    
+
     hidden_states = self.norm_out(hidden_states, temb)
     output = self.proj_out(hidden_states)
 

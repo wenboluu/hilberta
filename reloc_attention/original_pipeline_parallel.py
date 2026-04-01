@@ -64,11 +64,12 @@ def generate_on_device(
 ):
     device = f"cuda:{device_id}"
     torch.cuda.set_device(device_id)
+    # NOTE: Modify cache_dir below for your server's cache location
     pipe = FluxPipeline.from_pretrained(
         "black-forest-labs/FLUX.1-dev",
         torch_dtype=torch.bfloat16,
         local_files_only=True,
-        cache_dir="/data2/wl2707/",
+        cache_dir="/data2/wl2707/",  # TODO: Update this path for your server
     ).to(device)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -97,15 +98,21 @@ def generate_on_device(
 
 
 def main():
+    # Get script directory for relative paths
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
     parser = argparse.ArgumentParser(description="Parallel multi-GPU FLUX generation with resume support")
     parser.add_argument("--no-resume", action="store_true", help="Disable resume; regenerate even if files exist")
     parser.add_argument("--gpus", type=str, default="", help="Comma-separated CUDA device indices to use, e.g. '0,1,3'")
-
-    prompts_path = "/home/sz3684/diffusion/reorder_local_attention/HilbertA/reloc_attention/coco_prompts.json"
-    output_dir = "/home/sz3684/diffusion/reorder_local_attention/HilbertA/reloc_attention/flux_2048"
-
+    parser.add_argument("--prompts", type=str, default=os.path.join(script_dir, "coco_prompts.json"),
+                        help="Path to prompts JSON file")
+    parser.add_argument("--output-dir", type=str, default=os.path.join(script_dir, "flux_2048"),
+                        help="Output directory for generated images")
 
     args = parser.parse_args()
+
+    prompts_path = args.prompts
+    output_dir = args.output_dir
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for multi-GPU generation")

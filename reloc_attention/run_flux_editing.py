@@ -3,13 +3,14 @@ from diffusers import FluxKontextPipeline
 import torch
 from diffusers.utils import load_image
 
+# NOTE: Update cache_dir and model_dir paths for your server
 model_dir = snapshot_download(
     model_id="black-forest-labs/FLUX.1-Kontext-dev",
-    cache_dir="/data2/sz3684/.cache/modelscope",
-    revision=None  
+    cache_dir="/data2/sz3684/.cache/modelscope",  # TODO: Update this path
+    revision=None
 )
 
-model_dir = "/data2/sz3684/.cache/modelscope/black-forest-labs/FLUX.1-Kontext-dev"
+model_dir = "/data2/sz3684/.cache/modelscope/black-forest-labs/FLUX.1-Kontext-dev"  # TODO: Update this path
 
 pipeline = FluxKontextPipeline.from_pretrained(
     model_dir,

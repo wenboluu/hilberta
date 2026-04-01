@@ -1,10 +1,11 @@
 from modelscope.hub.snapshot_download import snapshot_download
-from diffusers import FluxFillPipeline  
+from diffusers import FluxFillPipeline
 import torch
 from diffusers.utils import load_image
 from masking_utils import apply_patch
 
-model_dir = "/data2/sz3684/.cache/modelscope/black-forest-labs/FLUX.1-Fill-dev"
+# NOTE: Update model_dir path for your server
+model_dir = "/data2/sz3684/.cache/modelscope/black-forest-labs/FLUX.1-Fill-dev"  # TODO: Update this path
 
 image = load_image("https://huggingface.co/datasets/diffusers/diffusers-images-docs/resolve/main/cup.png")
 mask = load_image("https://huggingface.co/datasets/diffusers/diffusers-images-docs/resolve/main/cup_mask.png")

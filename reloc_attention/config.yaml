@@ -1,12 +1,15 @@
 # config.yaml
 num_tiles: 4
 sliding_cycle: 4
-prompt_list: [ "A man wearing a stripe suit."]
+prompt_list: ["A beautiful landscape with moutains and a lake in the middle."]
 seed_list: [42]
 num_of_inference_steps: 28
 remark: "New_RoPE"
 output_folder: "./output/"
-full_attn_step: [1,2]
-full_attn_layer: [1, 2]
+full_attn_step: [1, 2, 3, 4, 5, 6, 7, 8]
+full_attn_layer: []
 enable_profiler: False
 curve_type: "hilbert"
+method: "masking"  # Options: "masking" or "reorder" or "reorder_shared"
+cache_dir: "/scratch/sz3684/.cache/"
+lora_weight_path: "/scratch/sz3684/HilbertA/reorder_local_attention/reloc_attention/lora/checkpoint-2400"

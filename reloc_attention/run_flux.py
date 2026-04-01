@@ -1,6 +1,4 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
-
 import argparse
 import gc
 import itertools
@@ -18,11 +16,12 @@ from tqdm import tqdm
 from patch import apply_patch
 
 MODEL_REPO = "black-forest-labs/FLUX.1-dev"
-DEFAULT_CACHE_DIR = Path("/data1/shared_hf_home/")
-DEFAULT_LORA_PATH = Path(
-    # "/home/sz3684/diffusion/reorder_local_attention/HilbertA/reloc_attention/lora/checkpoint-79"
-    "/home/sz3684/diffusion/reorder_local_attention/triton_version/reloc_attention/lora_weight/ckpt_2048_16/checkpoint-2817/"
-)
+
+# NOTE: Configure these paths in config.yaml or modify below for your server:
+# - cache_dir: HuggingFace cache directory for model files
+# - lora_weight_path: Path to LoRA weights (if using LoRA fine-tuning)
+DEFAULT_CACHE_DIR = None  # Set in config.yaml or use HuggingFace default
+DEFAULT_LORA_PATH = None  # Set in config.yaml if using LoRA
 
 def clean_memory():
     """Release cached GPU memory after each generation."""
@@ -140,7 +139,8 @@ def evaluate_dst_selection(
     for prompt, seed in tqdm(
         configurations, total=total, desc="Processing configurations"
     ):
-        torch.cuda.reset_peak_memory_stats()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
         elapsed_time, file_name = generate_image(
             pipeline=pipeline,
             output_folder=output_folder,
@@ -155,12 +155,13 @@ def evaluate_dst_selection(
         )
         if profiler is not None:
             profiler.step()
-        current_memory = torch.cuda.memory_allocated()
-        peak_memory = torch.cuda.max_memory_allocated()
-        print(
-            f"Current memory: {current_memory / 1048576:.2f}MiB, "
-            f"Peak memory: {peak_memory / 1048576:.2f}MiB"
-        )
+        if torch.cuda.is_available():
+            current_memory = torch.cuda.memory_allocated()
+            peak_memory = torch.cuda.max_memory_allocated()
+            print(
+                f"Current memory: {current_memory / 1048576:.2f}MiB, "
+                f"Peak memory: {peak_memory / 1048576:.2f}MiB"
+            )
 
         results.append(
             {
@@ -194,20 +195,37 @@ def parse_args():
     return parser.parse_args()
 
 
-def prepare_pipeline(device, cache_dir=None, lora_path=None):
+def prepare_pipeline(device, cache_dir=None, lora_path=None, method="masking"):
     kwargs = {"torch_dtype": torch.bfloat16, "local_files_only": True}
     if cache_dir:
         kwargs["cache_dir"] = str(cache_dir)
-    
+
     pipeline = FluxPipeline.from_pretrained(MODEL_REPO, **kwargs).to(device)
-    
-    from masking_utils import customized_forward
-    # from reorder_utils_sliding  import customized_forward
+
+    # Dynamically import customized_forward based on method
+    if method == "masking":
+        from masking_utils import customized_forward, customized_call
+    elif method == "reorder":
+        from reorder_utils_sliding import customized_forward
+    elif method == "reorder_shared":
+        from reorder_utils_sliding_shared import customized_forward
+    else:
+        raise ValueError(f"Unknown method: {method}. Must be 'masking', 'reorder', or 'reorder_shared'")
+
     pipeline.transformer.forward = MethodType(customized_forward, pipeline.transformer)
-    
+
+    # For masking method, replace pipeline's class to enable step tracking
+    # We must modify the class because __call__ is a special method that must be defined on the class
+    if method == "masking":
+        class CustomFluxPipeline(pipeline.__class__):
+            def __call__(self, *args, **kwargs):
+                return customized_call(self, *args, **kwargs)
+
+        pipeline.__class__ = CustomFluxPipeline
+
     if lora_path:
         pipeline.load_lora_weights(str(lora_path))
-    
+
     return pipeline
 
 
@@ -231,10 +249,15 @@ def main():
 
     lora_path_value = config.get("lora_weight_path", DEFAULT_LORA_PATH)
     lora_path = Path(lora_path_value) if lora_path_value else None
+
+    method = config.get("method", "masking")
+    print(f"Method: {method}")
+
     pipeline = prepare_pipeline(
         device=device,
         cache_dir=cache_dir,
         lora_path=lora_path,
+        method=method,
     )
 
     # Optional PyTorch profiler

@@ -454,7 +454,6 @@ def customized_call(
 
                     # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                     timestep = t.expand(latents.shape[0]).to(latents.dtype)
-
                     noise_pred = self.transformer(
                         hidden_states=latents,
                         timestep=timestep / 1000,

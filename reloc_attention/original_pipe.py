@@ -8,7 +8,8 @@ from diffusers import FluxPipeline
 os.environ["CUDA_VISIBLE_DEVICES"] = "6"
 
 MODEL_REPO = "black-forest-labs/FLUX.1-dev"
-DEFAULT_CACHE_DIR = Path("/data2/wl2707/")
+# NOTE: Set cache_dir to your HuggingFace cache directory or None to use default
+DEFAULT_CACHE_DIR = None  # Path("/your/cache/dir/")
 DEFAULT_OUTPUT_DIR = Path(__file__).parent
 DEFAULT_HEIGHT = 1024
 DEFAULT_WIDTH = 1024
