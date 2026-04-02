@@ -48,21 +48,24 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
                     STAGE: tl.constexpr, offs_m: tl.constexpr, offs_n: tl.constexpr,  #
                     N_CTX: tl.constexpr, fp8_v: tl.constexpr, group_start: tl.constexpr, group_end: tl.constexpr):
     
+    # Pre-compute whether we need masking for the last block
+    valid_len = group_end - group_start
+    num_full_blocks = valid_len // BLOCK_N
+    needs_final_mask = (valid_len % BLOCK_N) != 0
+
     for rel_n in range(0, group_end - group_start, BLOCK_N):
         K_block_ptr_cur = tl.advance(K_block_ptr, (0, rel_n))
         V_block_ptr_cur = tl.advance(V_block_ptr, (rel_n, 0))
 
-
         k = tl.load(K_block_ptr_cur)
         qk = tl.dot(q, k)
 
-        # -- Masking for padding --
-        # When the loop reaches the end of a segment (e.g. right_len), 
+        # -- Masking for padding (only on the last partial block) --
+        # When the loop reaches the end of a segment (e.g. right_len),
         # block_ptr loads 0s for out-of-bound keys.
         # qk becomes 0, and exp(0)=1, which incorrectly contributes to attention.
         # We must mask these out to -inf.
-        valid_len = group_end - group_start
-        if rel_n + BLOCK_N > valid_len:
+        if needs_final_mask and rel_n == num_full_blocks * BLOCK_N:
             mask = (rel_n + offs_n) < valid_len
             qk = tl.where(mask[None, :], qk, float("-inf"))
 
@@ -78,11 +81,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
 
         # update acc
         v = tl.load(V_block_ptr_cur)
-        # pdb.set_trace()
-        if fp8_v:
-            p = p.to(tl.float8e5)
-        else:
-            p = p.to(tl.float16)
+        # Convert p directly to v's dtype (skip intermediate conversion)
         p = p.to(v.dtype)
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
@@ -173,8 +172,6 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
         block_shape=(BLOCK_M, HEAD_DIM),
         order=(1,0),
     )
-    q = tl.load(Q_ptr)
-
 
     K_full = tl.make_block_ptr(base=K + qvk_offset,
                             shape=(HEAD_DIM, M_total),
@@ -251,10 +248,11 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     l_i = tl.full([BLOCK_M], 1.0, dtype=tl.float32)
     acc = tl.full([BLOCK_M, HEAD_DIM], 0.0, dtype=tl.float32)
 
-    # load scales
+    # load scales and query
     qk_scale = sm_scale
     qk_scale *= 1.44269504  # 1/log(2)
     q = tl.load(Q_ptr)
+
     if start_m * BLOCK_M < N_CTX_shared:
         # Process shared region (no shift)
         acc, l_i, m_i = _attn_fwd_inner(
