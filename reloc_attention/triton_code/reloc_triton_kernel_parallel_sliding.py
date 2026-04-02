@@ -56,6 +56,16 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
         k = tl.load(K_block_ptr_cur)
         qk = tl.dot(q, k)
 
+        # -- Masking for padding --
+        # When the loop reaches the end of a segment (e.g. right_len), 
+        # block_ptr loads 0s for out-of-bound keys.
+        # qk becomes 0, and exp(0)=1, which incorrectly contributes to attention.
+        # We must mask these out to -inf.
+        valid_len = group_end - group_start
+        if rel_n + BLOCK_N > valid_len:
+            mask = (rel_n + offs_n) < valid_len
+            qk = tl.where(mask[None, :], qk, float("-inf"))
+
         m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
         qk = qk * qk_scale - m_ij[:, None]
         p = tl.math.exp2(qk)
@@ -103,6 +113,8 @@ def keep(conf):
 
 @triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
 @triton.jit
+# === Memory Layout (Strides) ===
+# qz=batch, qh=head, qm=sequence_length, qk=head_dim
 def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               stride_qz, stride_qh, stride_qm, stride_qk,  #
               stride_kz, stride_kh, stride_kn, stride_kk,  #
@@ -117,16 +129,22 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
               ):
     tl.static_assert(BLOCK_N <= HEAD_DIM)
 
-    start_m = tl.program_id(0)
-    off_hz = tl.program_id(1)
-    off_z = off_hz // H
-    off_h = off_hz % H
-    qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh #decide which batch and head to load
-    qvk_offset_after_shared = qvk_offset + N_CTX_shared * stride_qm
+    start_m = tl.program_id(0)      # block index
+    off_hz = tl.program_id(1)      
+    off_z = off_hz // H             # batch index   
+    off_h = off_hz % H              # head index
+    qvk_offset = off_z.to(tl.int64) * stride_qz.to(tl.int64) + off_h.to(tl.int64) * stride_qh.to(tl.int64)  #decide which batch and head to load
+    qvk_offset_after_shared = qvk_offset + N_CTX_shared.to(tl.int64) * stride_qm.to(tl.int64)
 
     # Calculate the group index
+    # For shared region (start_m * BLOCK_M < N_CTX_shared), this might be negative,
+    # but it's not used in that branch. We treat it carefully.
+    current_pos = start_m * BLOCK_M
     group_size = N_CTX // GROUPS
-    group_id = ((start_m * BLOCK_M) - N_CTX_shared) // group_size
+    group_id = (current_pos - N_CTX_shared) // group_size
+    # Clamp negative group_id to 0 to avoid confusion, though unused in shared branch
+    # group_id = tl.maximum(group_id, 0)
+
     group_start = group_id * group_size + N_CTX_shared
     M_total = N_CTX_shared + N_CTX
 
@@ -134,11 +152,24 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     assert group_size % BLOCK_M == 0, "group_size must be divisible by BLOCK_M"
     assert (N_CTX_shared * GROUPS) % N_CTX == 0
 
+    # Determine if this block is in the image region (needs shifting)
+    is_image_region = current_pos >= N_CTX_shared
+
+    # Calculate shifted query position for image region
+    if is_image_region:
+        # Apply offset shift to query position within the image region
+        query_pos_in_image = current_pos - N_CTX_shared
+        query_pos_shifted = (query_pos_in_image + OFFSET) % N_CTX
+        query_load_pos = N_CTX_shared + query_pos_shifted
+    else:
+        # Shared region queries load from original position
+        query_load_pos = current_pos
+
     Q_ptr = tl.make_block_ptr(
         base=Q + qvk_offset,
         shape=(M_total, HEAD_DIM),
         strides=(stride_qm, stride_qk),
-        offsets=(start_m*BLOCK_M, 0),
+        offsets=(query_load_pos, 0),
         block_shape=(BLOCK_M, HEAD_DIM),
         order=(1,0),
     )
@@ -175,38 +206,39 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
     group_start_shifted = N_CTX_shared + ((group_start - N_CTX_shared + OFFSET) % N_CTX)
     right_len = tl.minimum(group_size, (N_CTX_shared + N_CTX) - group_start_shifted)
 
-    K_local_1 = tl.make_block_ptr(base=K + qvk_offset,
+    K_local_1 = tl.make_block_ptr(base=K + qvk_offset + group_start_shifted.to(tl.int64) * stride_kn,
                                   shape=(HEAD_DIM, right_len),
                                   strides=(stride_kk, stride_kn),
-                                  offsets=(0, group_start_shifted),
+                                  offsets=(0, 0),
                                   block_shape=(HEAD_DIM, BLOCK_N),
                                   order=(0, 1))
-    V_local_1 = tl.make_block_ptr(base=V + qvk_offset,
+    V_local_1 = tl.make_block_ptr(base=V + qvk_offset + group_start_shifted.to(tl.int64) * stride_vk,
                                   shape=(right_len, HEAD_DIM),
                                   strides=(stride_vk, stride_vn),
-                                  offsets=(group_start_shifted, 0),
+                                  offsets=(0, 0),
                                   block_shape=(BLOCK_N, HEAD_DIM),
                                   order=(1, 0))
 
     rem_len = group_size - right_len
     # Second segment wraps to the beginning of the image region if needed
-    K_local_2 = tl.make_block_ptr(base=K + qvk_offset,
+    K_local_2 = tl.make_block_ptr(base=K + qvk_offset + N_CTX_shared.to(tl.int64) * stride_kn,
                                   shape=(HEAD_DIM, rem_len),
                                   strides=(stride_kk, stride_kn),
-                                  offsets=(0, N_CTX_shared),
+                                  offsets=(0, 0),
                                   block_shape=(HEAD_DIM, BLOCK_N),
                                   order=(0, 1))
-    V_local_2 = tl.make_block_ptr(base=V + qvk_offset,
+    V_local_2 = tl.make_block_ptr(base=V + qvk_offset + N_CTX_shared.to(tl.int64) * stride_vk,
                                   shape=(rem_len, HEAD_DIM),
                                   strides=(stride_vk, stride_vn),
-                                  offsets=(N_CTX_shared, 0),
+                                  offsets=(0, 0),
                                   block_shape=(BLOCK_N, HEAD_DIM),
                                   order=(1, 0))
+    # Output should write to the same shifted position as query was loaded from
     O_block_ptr = tl.make_block_ptr(
         base=Out + qvk_offset,
         shape=(M_total, HEAD_DIM),
         strides=(stride_om, stride_on),
-        offsets=(start_m * BLOCK_M, 0),
+        offsets=(query_load_pos, 0),
         block_shape=(BLOCK_M, HEAD_DIM),
         order=(1, 0),
     )
@@ -237,30 +269,30 @@ def _attn_fwd(Q, K, V, sm_scale, M, Out,  #
         img_start_shifted = N_CTX_shared + (OFFSET % N_CTX)
         img_right_len = tl.minimum(N_CTX, (N_CTX_shared + N_CTX) - img_start_shifted)
 
-        K_img_1 = tl.make_block_ptr(base=K + qvk_offset,
+        K_img_1 = tl.make_block_ptr(base=K + qvk_offset + img_start_shifted.to(tl.int64) * stride_kn,
                                      shape=(HEAD_DIM, img_right_len),
                                      strides=(stride_kk, stride_kn),
-                                     offsets=(0, img_start_shifted),
+                                     offsets=(0, 0),
                                      block_shape=(HEAD_DIM, BLOCK_N),
                                      order=(0, 1))
-        V_img_1 = tl.make_block_ptr(base=V + qvk_offset,
+        V_img_1 = tl.make_block_ptr(base=V + qvk_offset + img_start_shifted.to(tl.int64) * stride_vk,
                                      shape=(img_right_len, HEAD_DIM),
                                      strides=(stride_vk, stride_vn),
-                                     offsets=(img_start_shifted, 0),
+                                     offsets=(0, 0),
                                      block_shape=(BLOCK_N, HEAD_DIM),
                                      order=(1, 0))
 
         img_rem_len = N_CTX - img_right_len
-        K_img_2 = tl.make_block_ptr(base=K + qvk_offset,
+        K_img_2 = tl.make_block_ptr(base=K + qvk_offset + N_CTX_shared.to(tl.int64) * stride_kn,
                                      shape=(HEAD_DIM, img_rem_len),
                                      strides=(stride_kk, stride_kn),
-                                     offsets=(0, N_CTX_shared),
+                                     offsets=(0, 0),
                                      block_shape=(HEAD_DIM, BLOCK_N),
                                      order=(0, 1))
-        V_img_2 = tl.make_block_ptr(base=V + qvk_offset,
+        V_img_2 = tl.make_block_ptr(base=V + qvk_offset + N_CTX_shared.to(tl.int64) * stride_vk,
                                      shape=(img_rem_len, HEAD_DIM),
                                      strides=(stride_vk, stride_vn),
-                                     offsets=(N_CTX_shared, 0),
+                                     offsets=(0, 0),
                                      block_shape=(BLOCK_N, HEAD_DIM),
                                      order=(1, 0))
 
@@ -330,7 +362,7 @@ class _attention(torch.autograd.Function):
             extra_kern_args = {"waves_per_eu": waves_per_eu, "allow_flush_denorm": True}
 
         M = torch.empty((q.shape[0], q.shape[1], n_seq+n_shared), device=q.device, dtype=torch.float32) # Maximize value for each position 
-        
+
         grid = lambda args: (triton.cdiv(n_seq+n_shared, args["BLOCK_M"]), q.shape[0] * q.shape[1], 1)
         ctx.grid = grid
         _attn_fwd[grid](

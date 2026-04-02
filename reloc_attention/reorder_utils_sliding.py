@@ -94,11 +94,14 @@ def _get_inverse_on_device(sequence_length: int, device: torch.device) -> torch.
 def hilbert_tile(x, offset=0):
     sequence_length = x.shape[1]
     hilbert_index = _get_index_on_device(sequence_length, x.device)
-    if offset:
-        hilbert_index = torch.remainder(hilbert_index - offset, sequence_length)
 
     gather_index = hilbert_index.view(1, sequence_length, 1).expand(x.shape[0], sequence_length, x.shape[2])
-    return torch.gather(x, 1, gather_index)
+    x_reordered = torch.gather(x, 1, gather_index)
+
+    if offset:
+        x_reordered = torch.roll(x_reordered, shifts=offset, dims=1)
+
+    return x_reordered
 
 
 def hilbert_untile(x_hilbert, offset=0):
@@ -106,7 +109,7 @@ def hilbert_untile(x_hilbert, offset=0):
     inverse_index = _get_inverse_on_device(sequence_length, x_hilbert.device)
 
     if offset:
-        x_hilbert = torch.roll(x_hilbert, shifts=offset, dims=1)
+        x_hilbert = torch.roll(x_hilbert, shifts=-offset, dims=1)
 
     gather_index = inverse_index.view(1, sequence_length, 1).expand(x_hilbert.shape[0], sequence_length, x_hilbert.shape[2])
     return torch.gather(x_hilbert, 1, gather_index)
@@ -206,7 +209,7 @@ def customized_forward(
             config = yaml.safe_load(f)
         return config
     
-    config = load_config("/scratch/sz3684/HilbertA/reorder_local_attention/reloc_attention/config.yaml")
+    config = load_config("./config.yaml")
 
     num_tiles = config['num_tiles'] if 'num_tiles' in config else 16
 
