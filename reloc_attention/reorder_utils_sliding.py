@@ -1,7 +1,6 @@
 import torch
 
 from typing import Any, Dict, Optional, Tuple, Union
-from functools import lru_cache
 import yaml
 import numpy as np
 import torch
@@ -53,23 +52,6 @@ def untile(x_tiled, num_tiles):
 
     return x_tiles.view(B, H * W, C)
 
-@lru_cache(maxsize=None)
-def _base_hilbert_indices(sequence_length: int) -> torch.Tensor:
-    if sequence_length == 4096:
-        return get_hilbert_flat_indices(6)
-    if sequence_length == 16384:
-        return get_hilbert_flat_indices(7)
-    raise ValueError(f"Unsupported sequence_length {sequence_length} for Hilbert ordering")
-
-
-@lru_cache(maxsize=None)
-def _base_inverse_hilbert_indices(sequence_length: int) -> torch.Tensor:
-    if sequence_length == 4096:
-        return get_inverse_hilbert_indices(6)
-    if sequence_length == 16384:
-        return get_inverse_hilbert_indices(7)
-    raise ValueError(f"Unsupported sequence_length {sequence_length} for Hilbert ordering")
-
 _DEVICE_INDEX_CACHE: Dict[Tuple[int, torch.device], torch.Tensor] = {}
 _DEVICE_INVERSE_CACHE: Dict[Tuple[int, torch.device], torch.Tensor] = {}
 
@@ -78,15 +60,28 @@ def _get_index_on_device(sequence_length: int, device: torch.device) -> torch.Te
     key = (sequence_length, device)
     cached = _DEVICE_INDEX_CACHE.get(key)
     if cached is None or cached.device != device:
-        cached = _base_hilbert_indices(sequence_length).to(device, non_blocking=True)
+        if sequence_length == 4096:
+            base = get_hilbert_flat_indices(6)
+        elif sequence_length == 16384:
+            base = get_hilbert_flat_indices(7)
+        else:
+            raise ValueError(f"Unsupported sequence_length {sequence_length} for Hilbert ordering")
+        cached = base.to(device, non_blocking=True)
         _DEVICE_INDEX_CACHE[key] = cached
     return cached
+
 
 def _get_inverse_on_device(sequence_length: int, device: torch.device) -> torch.Tensor:
     key = (sequence_length, device)
     cached = _DEVICE_INVERSE_CACHE.get(key)
     if cached is None or cached.device != device:
-        cached = _base_inverse_hilbert_indices(sequence_length).to(device, non_blocking=True)
+        if sequence_length == 4096:
+            base = get_inverse_hilbert_indices(6)
+        elif sequence_length == 16384:
+            base = get_inverse_hilbert_indices(7)
+        else:
+            raise ValueError(f"Unsupported sequence_length {sequence_length} for Hilbert ordering")
+        cached = base.to(device, non_blocking=True)
         _DEVICE_INVERSE_CACHE[key] = cached
     return cached
 
@@ -95,6 +90,7 @@ def hilbert_tile(x, offset=0):
     sequence_length = x.shape[1]
     hilbert_index = _get_index_on_device(sequence_length, x.device)
 
+    # First: reorder from spatial to Hilbert order
     gather_index = hilbert_index.view(1, sequence_length, 1).expand(x.shape[0], sequence_length, x.shape[2])
     x_reordered = torch.gather(x, 1, gather_index)
 
@@ -108,9 +104,11 @@ def hilbert_untile(x_hilbert, offset=0):
     sequence_length = x_hilbert.shape[1]
     inverse_index = _get_inverse_on_device(sequence_length, x_hilbert.device)
 
+    # First: undo offset rotation (if any)
     if offset:
         x_hilbert = torch.roll(x_hilbert, shifts=-offset, dims=1)
 
+    # Second: reorder from Hilbert back to spatial order
     gather_index = inverse_index.view(1, sequence_length, 1).expand(x_hilbert.shape[0], sequence_length, x_hilbert.shape[2])
     return torch.gather(x_hilbert, 1, gather_index)
 
@@ -202,6 +200,7 @@ def customized_forward(
     controlnet_single_block_samples=None,
     return_dict: bool = True,
     controlnet_blocks_repeat: bool = False,
+    step: int = 0,
 ) -> Union[torch.FloatTensor, Transformer2DModelOutput]:
     def load_config(config_path):
         """Load configuration from YAML file"""
@@ -259,9 +258,9 @@ def customized_forward(
     B, N, C = hidden_states.shape
 
     # Apply initial Hilbert reordering once
-    image_rotary_emb, hidden_states = apply_hilbert_reorder(
-        image_rotary_emb, hidden_states, num_tiles, offset = 0
-    )
+    # image_rotary_emb, hidden_states = apply_hilbert_reorder(
+    #     image_rotary_emb, hidden_states, num_tiles, offset = 0
+    # )
 
     for index_block, block in enumerate(self.transformer_blocks):
 
@@ -286,9 +285,9 @@ def customized_forward(
         )
 
     hidden_states = hidden_states[:, encoder_hidden_states.shape[1]:, :]
-    image_rotary_emb, hidden_states = recover_hilbert_reorder(
-        image_rotary_emb, hidden_states, num_tiles, offset = 0
-    )
+    # image_rotary_emb, hidden_states = recover_hilbert_reorder(
+    #     image_rotary_emb, hidden_states, num_tiles, offset = 0
+    # )
     hidden_states = hidden_states.reshape(B, -1, C)
     
     hidden_states = self.norm_out(hidden_states, temb)

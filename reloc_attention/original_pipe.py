@@ -1,20 +1,20 @@
 import os
+
 from pathlib import Path
 import re
+from types import MethodType
 
 import torch
 from diffusers import FluxPipeline
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "6"
-
 MODEL_REPO = "black-forest-labs/FLUX.1-dev"
 # NOTE: Set cache_dir to your HuggingFace cache directory or None to use default
-DEFAULT_CACHE_DIR = None  # Path("/your/cache/dir/")
+DEFAULT_CACHE_DIR = '/scratch/sz3684/.cache/'  # Path("/your/cache/dir/")
 DEFAULT_OUTPUT_DIR = Path(__file__).parent
 DEFAULT_HEIGHT = 1024
 DEFAULT_WIDTH = 1024
 DEFAULT_GUIDANCE_SCALE = 3.5
-DEFAULT_NUM_STEPS = 5
+DEFAULT_NUM_STEPS = 28
 DEFAULT_SEED = 0
 
 PROMPT_LIST = [
@@ -29,6 +29,15 @@ def prepare_pipeline(device: str) -> FluxPipeline:
         local_files_only=True,
         cache_dir=str(DEFAULT_CACHE_DIR),
     ).to(device)
+
+    # Apply customized_call to enable per-timestep timing
+    from masking_utils import customized_call
+    class CustomFluxPipeline(pipe.__class__):
+        def __call__(self, *args, **kwargs):
+            return customized_call(self, *args, **kwargs)
+
+    pipe.__class__ = CustomFluxPipeline
+
     return pipe
 
 

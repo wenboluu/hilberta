@@ -155,7 +155,7 @@ if __name__ == "__main__":
     pipeline = FluxPipeline.from_pretrained(
         "black-forest-labs/FLUX.1-dev",
         torch_dtype=torch.bfloat16,
-        cache_dir=args.cache_dir,
+        cache_dir="/scratch/sz3684/.cache/",
         local_files_only=True,
     ).to(device)
 

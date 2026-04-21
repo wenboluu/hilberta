@@ -17,17 +17,10 @@ from patch import apply_patch
 
 MODEL_REPO = "black-forest-labs/FLUX.1-dev"
 
-# NOTE: Configure these paths in config.yaml or modify below for your server:
-# - cache_dir: HuggingFace cache directory for model files
-# - lora_weight_path: Path to LoRA weights (if using LoRA fine-tuning)
-DEFAULT_CACHE_DIR = None  # Set in config.yaml or use HuggingFace default
-DEFAULT_LORA_PATH = None  # Set in config.yaml if using LoRA
-
 def clean_memory():
     """Release cached GPU memory after each generation."""
     torch.cuda.empty_cache()
     gc.collect()
-
 
 def generate_image(
     pipeline,
@@ -216,12 +209,12 @@ def prepare_pipeline(device, cache_dir=None, lora_path=None, method="masking"):
 
     # For masking method, replace pipeline's class to enable step tracking
     # We must modify the class because __call__ is a special method that must be defined on the class
-    if method == "masking":
-        class CustomFluxPipeline(pipeline.__class__):
-            def __call__(self, *args, **kwargs):
-                return customized_call(self, *args, **kwargs)
+    from masking_utils import customized_call
+    class CustomFluxPipeline(pipeline.__class__):
+        def __call__(self, *args, **kwargs):
+            return customized_call(self, *args, **kwargs)
 
-        pipeline.__class__ = CustomFluxPipeline
+    pipeline.__class__ = CustomFluxPipeline
 
     if lora_path:
         pipeline.load_lora_weights(str(lora_path))
@@ -244,10 +237,10 @@ def main():
     print(f"Curve type: {curve_type}")
     print(f"Output directory: {output_folder}")
 
-    cache_dir_value = config.get("cache_dir", DEFAULT_CACHE_DIR)
+    cache_dir_value = config.get("cache_dir", None)
     cache_dir = Path(cache_dir_value) if cache_dir_value else None
 
-    lora_path_value = config.get("lora_weight_path", DEFAULT_LORA_PATH)
+    lora_path_value = config.get("lora_weight_path", None)
     lora_path = Path(lora_path_value) if lora_path_value else None
 
     method = config.get("method", "masking")

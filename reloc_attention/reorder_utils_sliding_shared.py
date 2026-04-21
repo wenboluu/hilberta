@@ -111,6 +111,93 @@ def hilbert_untile(x_hilbert, offset=0):
     gather_index = inverse_index.view(1, sequence_length, 1).expand(x_hilbert.shape[0], sequence_length, x_hilbert.shape[2])
     return torch.gather(x_hilbert, 1, gather_index)
 
+
+def apply_hilbert_reorder_simple(image_rotary_emb, hidden_states, num_tiles, offset=0):
+    """
+    Simple version: Reorder ALL image tokens using Hilbert curve (no center/sparse separation).
+
+    Args:
+        image_rotary_emb (tuple): (rotary_emb_1, rotary_emb_2), shape [512 + H*W, dim]
+        hidden_states (torch.Tensor): [B, H*W, C]
+        num_tiles (int): Number of tiles
+        offset (int): Hilbert offset for sliding window
+
+    Returns:
+        image_rotary_emb: Tuple of reordered RoPE [text(512), image(4096)]
+        hidden_states: Reordered hidden states [B, 4096, C]
+    """
+    image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
+
+    # Split text and image parts
+    text_emb_1, image_emb_1 = image_rotary_emb_1[:512], image_rotary_emb_1[512:]
+    text_emb_2, image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
+
+    sequence_length = hidden_states.shape[1]
+
+    # Get Hilbert indices with offset
+    hilbert_index = _get_index_on_device(sequence_length, hidden_states.device)
+    if offset:
+        hilbert_index = torch.remainder(hilbert_index - offset, sequence_length)
+
+    # Sort all tokens by Hilbert order
+    hilbert_sorted_positions = torch.argsort(hilbert_index)
+
+    # Reorder ALL image tokens
+    hilbert_hidden = hidden_states[:, hilbert_sorted_positions, :]
+    hilbert_emb_1 = image_emb_1[hilbert_sorted_positions, :]
+    hilbert_emb_2 = image_emb_2[hilbert_sorted_positions, :]
+
+    # Concatenate with text
+    image_rotary_emb_1 = torch.cat([text_emb_1, hilbert_emb_1], dim=0)
+    image_rotary_emb_2 = torch.cat([text_emb_2, hilbert_emb_2], dim=0)
+
+    return (image_rotary_emb_1, image_rotary_emb_2), hilbert_hidden
+
+
+def recover_hilbert_reorder_simple(image_rotary_emb, hidden_states, num_tiles, offset=0):
+    """
+    Simple version: Recover original spatial order from Hilbert-reordered tokens.
+
+    Args:
+        image_rotary_emb (tuple): (rotary_emb_1, rotary_emb_2), shape [512 + H*W, dim]
+        hidden_states (torch.Tensor): [B, H*W, C] in Hilbert order
+        num_tiles (int): Number of tiles
+        offset (int): Hilbert offset used during reordering
+
+    Returns:
+        image_rotary_emb: Tuple of recovered RoPE
+        hidden_states: Recovered hidden states [B, H*W, C] in spatial order
+    """
+    image_rotary_emb_1, image_rotary_emb_2 = image_rotary_emb
+
+    # Split text and image parts
+    text_emb_1, image_emb_1 = image_rotary_emb_1[:512], image_rotary_emb_1[512:]
+    text_emb_2, image_emb_2 = image_rotary_emb_2[:512], image_rotary_emb_2[512:]
+
+    sequence_length = hidden_states.shape[1]
+
+    # Get Hilbert indices with offset (same as forward)
+    hilbert_index = _get_index_on_device(sequence_length, hidden_states.device)
+    if offset:
+        hilbert_index = torch.remainder(hilbert_index - offset, sequence_length)
+
+    hilbert_sorted_positions = torch.argsort(hilbert_index)
+
+    # Get inverse permutation
+    inverse_positions = torch.argsort(hilbert_sorted_positions)
+
+    # Recover original spatial order
+    recovered_hidden = hidden_states[:, inverse_positions, :]
+    recovered_emb_1 = image_emb_1[inverse_positions, :]
+    recovered_emb_2 = image_emb_2[inverse_positions, :]
+
+    # Concatenate with text
+    image_rotary_emb_1 = torch.cat([text_emb_1, recovered_emb_1], dim=0)
+    image_rotary_emb_2 = torch.cat([text_emb_2, recovered_emb_2], dim=0)
+
+    return (image_rotary_emb_1, image_rotary_emb_2), recovered_hidden
+
+
 def apply_hilbert_reorder(image_rotary_emb, hidden_states, num_tiles, offset = 0):
     """
     Reorders the image part of rotary embeddings and hidden states using Hilbert curve,
@@ -318,6 +405,7 @@ def customized_forward(
     controlnet_single_block_samples=None,
     return_dict: bool = True,
     controlnet_blocks_repeat: bool = False,
+    step: int = 0,
 ) -> Union[torch.FloatTensor, Transformer2DModelOutput]:
     def load_config(config_path):
         """Load configuration from YAML file"""
@@ -377,8 +465,8 @@ def customized_forward(
     image_rotary_emb = self.pos_embed(ids)
     B, N, C = hidden_states.shape
 
-    # Apply initial Hilbert reordering with center/sparse separation
-    image_rotary_emb, hidden_states = apply_hilbert_reorder(
+    # Apply initial Hilbert reordering - SIMPLE VERSION (no center/sparse separation)
+    image_rotary_emb, hidden_states = apply_hilbert_reorder_simple(
         image_rotary_emb, hidden_states, num_tiles, offset = 0
     )
 
@@ -405,7 +493,8 @@ def customized_forward(
         )
 
     hidden_states = hidden_states[:, encoder_hidden_states.shape[1]:, :]
-    image_rotary_emb, hidden_states = recover_hilbert_reorder(
+    # Recover using simple version (no center/sparse separation)
+    image_rotary_emb, hidden_states = recover_hilbert_reorder_simple(
         image_rotary_emb, hidden_states, num_tiles, offset = 0
     )
     hidden_states = hidden_states.reshape(B, -1, C)

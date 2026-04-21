@@ -445,6 +445,9 @@ def customized_call(
             start_event = torch.cuda.Event(enable_timing=True)
             end_event = torch.cuda.Event(enable_timing=True)
             start_event.record()
+
+            # Track per-timestep timing
+            timestep_durations = []
             #################################################
 
             with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -452,20 +455,45 @@ def customized_call(
                     if self.interrupt:
                         continue
 
+                    # Start timing for this timestep
+                    step_start = torch.cuda.Event(enable_timing=True)
+                    step_end = torch.cuda.Event(enable_timing=True)
+                    step_start.record()
+
                     # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                     timestep = t.expand(latents.shape[0]).to(latents.dtype)
-                    noise_pred = self.transformer(
-                        hidden_states=latents,
-                        timestep=timestep / 1000,
-                        guidance=guidance,
-                        pooled_projections=pooled_prompt_embeds,
-                        encoder_hidden_states=prompt_embeds,
-                        txt_ids=text_ids,
-                        img_ids=latent_image_ids,
-                        joint_attention_kwargs=self.joint_attention_kwargs,
-                        return_dict=False,
-                        step = i
-                    )[0]
+
+                    # Check if transformer's forward method accepts 'step' parameter
+                    transformer_forward = self.transformer.forward
+                    forward_signature = inspect.signature(transformer_forward)
+                    accepts_step = 'step' in forward_signature.parameters
+
+                    # Call transformer with or without step parameter
+                    if accepts_step:
+                        noise_pred = self.transformer(
+                            hidden_states=latents,
+                            timestep=timestep / 1000,
+                            guidance=guidance,
+                            pooled_projections=pooled_prompt_embeds,
+                            encoder_hidden_states=prompt_embeds,
+                            txt_ids=text_ids,
+                            img_ids=latent_image_ids,
+                            joint_attention_kwargs=self.joint_attention_kwargs,
+                            return_dict=False,
+                            step = i
+                        )[0]
+                    else:
+                        noise_pred = self.transformer(
+                            hidden_states=latents,
+                            timestep=timestep / 1000,
+                            guidance=guidance,
+                            pooled_projections=pooled_prompt_embeds,
+                            encoder_hidden_states=prompt_embeds,
+                            txt_ids=text_ids,
+                            img_ids=latent_image_ids,
+                            joint_attention_kwargs=self.joint_attention_kwargs,
+                            return_dict=False,
+                        )[0]
 
                     # compute the previous noisy sample x_t -> x_t-1
                     latents_dtype = latents.dtype
@@ -485,6 +513,12 @@ def customized_call(
                         latents = callback_outputs.pop("latents", latents)
                         prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
 
+                    # End timing for this timestep
+                    step_end.record()
+                    torch.cuda.synchronize()
+                    step_duration = step_start.elapsed_time(step_end) / 1000  # Convert to seconds
+                    timestep_durations.append(step_duration)
+
                     # call the callback, if provided
                     if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                         progress_bar.update()
@@ -494,6 +528,20 @@ def customized_call(
             torch.cuda.synchronize()
             denoise_time = start_event.elapsed_time(end_event)
             print(f"denoise time: {denoise_time / 1000} seconds")
+
+            # Compute and print per-timestep statistics
+            if timestep_durations:
+                timestep_durations_array = np.array(timestep_durations)
+                print(f"\n{'='*60}")
+                print(f"Per-Timestep Statistics:")
+                print(f"{'='*60}")
+                print(f"  Total timesteps: {len(timestep_durations)}")
+                print(f"  Min time:        {np.min(timestep_durations_array):.4f} seconds")
+                print(f"  Max time:        {np.max(timestep_durations_array):.4f} seconds")
+                print(f"  Median time:     {np.median(timestep_durations_array):.4f} seconds")
+                print(f"  Average time:    {np.mean(timestep_durations_array):.4f} seconds")
+                print(f"  Std deviation:   {np.std(timestep_durations_array):.4f} seconds")
+                print(f"{'='*60}\n")
             #################################################
 
             if output_type == "latent":

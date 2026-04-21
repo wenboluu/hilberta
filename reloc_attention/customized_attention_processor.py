@@ -21,7 +21,7 @@ import torch._dynamo as dynamo
 # Import Attention and standard processors from diffusers
 from diffusers.models.attention_processor import Attention, AttnProcessor, AttnProcessor2_0
 
-from utils import isinstance_str, init_generator, apply_rotary_emb
+# from utils import isinstance_str, init_generator, apply_rotary_emb
 # Load mask files by curve type from config
 with open('./config.yaml', 'r') as _f:
     _config = yaml.safe_load(_f)
@@ -33,60 +33,8 @@ if _method not in ['masking', 'reorder', 'reorder_shared']:
     raise ValueError("config.method must be 'masking', 'reorder', or 'reorder_shared'")
 mask_dir = f'./mask_{_curve_type}'
 
-# Determine device for loading masks
+# # Determine device for loading masks
 _device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-
-# Load 4096 masks with 4 tiles
-mask_4096_0_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_4.pt'), map_location=_device)
-mask_4096_256_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_256_num_of_tiles_4.pt'), map_location=_device)
-mask_4096_512_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_512_num_of_tiles_4.pt'), map_location=_device)
-mask_4096_768_4 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_768_num_of_tiles_4.pt'), map_location=_device)
-
-# Load 4096 masks with 16 tiles
-mask_4096_0_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_0_num_of_tiles_16.pt'), map_location=_device)
-mask_4096_64_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_64_num_of_tiles_16.pt'), map_location=_device)
-mask_4096_128_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_128_num_of_tiles_16.pt'), map_location=_device)
-mask_4096_192_16 = torch.load(os.path.join(mask_dir, 'image_size_4096_offset_192_num_of_tiles_16.pt'), map_location=_device)
-
-# Load 16384 masks with 4 tiles
-mask_16384_0_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_0_num_of_tiles_4.pt'), map_location=_device)
-mask_16384_1024_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_1024_num_of_tiles_4.pt'), map_location=_device)
-mask_16384_2048_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_2048_num_of_tiles_4.pt'), map_location=_device)
-mask_16384_3072_4 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_3072_num_of_tiles_4.pt'), map_location=_device)
-
-# Load 16384 masks with 16 tiles
-mask_16384_0_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_0_num_of_tiles_16.pt'), map_location=_device)
-mask_16384_256_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_256_num_of_tiles_16.pt'), map_location=_device)
-mask_16384_512_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_512_num_of_tiles_16.pt'), map_location=_device)
-mask_16384_768_16 = torch.load(os.path.join(mask_dir, 'image_size_16384_offset_768_num_of_tiles_16.pt'), map_location=_device)
-
-# Create mask dictionary
-mask_list = {
-    # 4096 masks with 4 tiles
-    '4096_0_4': mask_4096_0_4,
-    '4096_256_4': mask_4096_256_4,
-    '4096_512_4': mask_4096_512_4,
-    '4096_768_4': mask_4096_768_4,
-    
-    # 4096 masks with 16 tiles
-    '4096_0_16': mask_4096_0_16,
-    '4096_64_16': mask_4096_64_16,
-    '4096_128_16': mask_4096_128_16,
-    '4096_192_16': mask_4096_192_16,
-
-    # 16384 masks with 4 tiles
-    '16384_0_4': mask_16384_0_4,
-    '16384_1024_4': mask_16384_1024_4,
-    '16384_2048_4': mask_16384_2048_4,
-    '16384_3072_4': mask_16384_3072_4,
-
-    # 16384 masks with 16 tiles
-    '16384_0_16': mask_16384_0_16,
-    '16384_256_16': mask_16384_256_16,
-    '16384_512_16': mask_16384_512_16,
-    '16384_768_16': mask_16384_768_16,
-}
-
 
 class FluxAttnProcessor2_0_for_transformerblock_global:
     """Attention processor used typically in processing the SD3-like self-attention projections."""
@@ -181,10 +129,11 @@ class FluxAttnProcessor2_0_for_transformerblock_global:
         elif _method == "reorder":
             # ======================Reorder Method: Parallel Triton Kernel with sliding======================
             from triton_code.reloc_triton_kernel_parallel_sliding import attention
-            N_CTX_shared = 512  # Only text tokens for standard reorder
-            N_CTX = query.shape[-2] - N_CTX_shared
-            GROUPS = _config['num_tiles']
-            hidden_states = attention(query, key, value, N_CTX_shared, N_CTX, False, 1.0 / 128**0.5, GROUPS, self._tome_info['args']['offset'], False).to(query.dtype)
+            # N_CTX_shared = 512  # Only text tokens for standard reorder
+            # N_CTX = query.shape[-2] - N_CTX_shared
+            # GROUPS = _config['num_tiles']
+            # hidden_states = attention(query, key, value, N_CTX_shared, N_CTX, False, 1.0 / 128**0.5, GROUPS, self._tome_info['args']['offset'], False).to(query.dtype)
+            hidden_states = attention(query, key, value, 512, 4096 - 512, False, 1.0 / 128**0.5, 4, 0, False).to(query.dtype)
             hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
             # ======================Reorder Method: Parallel Triton Kernel with sliding======================
 

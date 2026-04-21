@@ -3,15 +3,7 @@
 # Set error handling
 set -e
 
-# Activate conda environment (if you're using conda)
-# source ~/miniconda3/etc/profile.d/conda.sh
-# conda activate diffusion
-
-# Respect existing CUDA device selection; if not set, use GPU 0 by default
-if [ -z "${CUDA_VISIBLE_DEVICES+x}" ]; then
-    export CUDA_VISIBLE_DEVICES=0
-    echo "CUDA_VISIBLE_DEVICES not set, defaulting to GPU 0"
-fi
+export CUDA_VISIBLE_DEVICES=0
 
 # Set the base directory to the script's location
 BASE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -19,18 +11,7 @@ BASE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # Default config path
 CONFIG_PATH="${BASE_DIR}/config.yaml"
 
-# Check if config file exists
-if [ ! -f "$CONFIG_PATH" ]; then
-    echo "Error: Config file not found at $CONFIG_PATH"
-    exit 1
-fi
-
-# Use local penv Python if available, otherwise fall back to system python
-if [ -f "${BASE_DIR}/penv/bin/python" ]; then
-    PYTHON="${BASE_DIR}/penv/bin/python"
-else
-    PYTHON="python"
-fi
+PYTHON="${BASE_DIR}/penv/bin/python"
 
 # Determine curve type and mask dir from config
 CURVE_TYPE="$($PYTHON -c 'import yaml,sys; cfg=yaml.safe_load(open(sys.argv[1])); print((cfg.get("curve_type") or "hilbert").lower())' "$CONFIG_PATH")"
