@@ -4,154 +4,121 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a research implementation of **Relocated Attention** for the FLUX diffusion model. It optimizes attention computation by:
+This is a research implementation of **Relocated Attention (HilbertA)** for diffusion models. It optimizes attention computation by:
 1. Reordering image tokens using Hilbert curves to preserve spatial locality
 2. Applying local attention patterns with pre-computed masks
 3. Using Triton GPU kernels for efficient computation
 4. Implementing a sliding window mechanism with configurable offsets
 
-The approach splits attention into shared (text) and image-specific parts, enabling efficient high-resolution image generation.
+The approach splits attention into shared (text) and image-specific parts, enabling efficient high-resolution image generation. Supports multiple model backends: FLUX.1 and FLUX.2-klein.
 
 ## Key Commands
 
 ### Running Inference
 ```bash
-# Main execution (uses config.yaml)
-./reloc_attention/run_flux.sh
+# FLUX.1 (original)
+cd reloc_attention && bash run_flux.sh
 
-# Direct Python execution
-reloc_attention/penv/bin/python reloc_attention/run_flux.py --config reloc_attention/config.yaml
+# FLUX.2-klein
+cd flux2_hilberta && bash run_flux2.sh
+```
+
+### FLUX.2 Batch Evaluation
+```bash
+# Submit 5 GPU jobs, 1000 images each, batch_size=16
+bash submit_flux2_eval.sh 5
+
+# Or manually
+sbatch run_evaluation_flux2.sbatch 0 1000
 ```
 
 ### Testing Triton Kernels
 ```bash
 cd reloc_attention/triton_code/
-
-# Test kernel accuracy
-../penv/bin/python test_kernel_accuracy.py
-
-# Benchmark kernel performance
-../penv/bin/python benchmark.py
-
-# Test parallel implementation
-../penv/bin/python test_parallel.py
+python test_clean.py
+python test_simple_equivalence.py
+python benchmark.py
 ```
 
-### Environment Setup
-The project uses a local Python environment at `reloc_attention/penv/`. Dependencies are in `reloc_attention/requirement.txt`.
+### Environment
+- Conda environment: `hilberta` (`conda activate hilberta`)
+- Dependencies: `reloc_attention/requirement.txt`
 
 ## Architecture
 
+### Model Adaptations
+
+Each model has its own directory with adapted versions of the core components:
+
+| Component | FLUX.1 (`reloc_attention/`) | FLUX.2 (`flux2_hilberta/`) |
+|-----------|---------------------------|---------------------------|
+| Block types | FluxTransformerBlock + FluxSingleTransformerBlock | Flux2TransformerBlock + Flux2SingleTransformerBlock |
+| RoPE format | Real (cos, sin) concatenated [text+image] | Real (cos, sin) computed separately then concatenated |
+| Modulation | Inside blocks (norm1) | Outside blocks (shared modulation modules) |
+| Text tokens | Fixed 512 | Fixed 512 |
+| Triton kernels | Local | Symlink to reloc_attention/triton_code |
+
+### Shared Components (model-agnostic)
+- **Triton kernels** (`reloc_attention/triton_code/`): Operate on generic Q/K/V tensors
+- **Hilbert curve math** (`utils.py` in each dir): `get_hilbert_flat_indices()`, `get_inverse_hilbert_indices()`
+- **Tiling primitives**: `tile()`, `untile()`, `hilbert_tile()`, `hilbert_untile()`
+
 ### Core Pipeline Flow
-1. **Configuration** ([config.yaml](reloc_attention/config.yaml)): Defines num_tiles (4 or 16), sliding_cycle, prompts, and model parameters
-2. **Patching** ([patch.py](reloc_attention/patch.py)): Replaces standard FLUX transformer blocks with custom attention processors
-3. **Mask Generation** ([create_mask.py](reloc_attention/create_mask.py)): Pre-computes attention masks based on Hilbert curve patterns (stored in `mask_list/`)
-4. **Reordering** ([reorder_utils.py](reloc_attention/reorder_utils.py)): Applies Hilbert curve transformations to tokens and rotary embeddings
-5. **Attention** ([customized_attention_processor.py](reloc_attention/customized_attention_processor.py)): Custom attention with Triton kernels
-
-### Critical Components
-
-**reorder_utils.py** - Token reordering functions:
-- `tile()` / `untile()`: Convert between spatial and tiled representations
-- `hilbert_tile()` / `hilbert_untile()`: Apply Hilbert curve reordering
-- `apply_hilbert_reorder()`: Main entry point for reordering pipeline
-
-**patch.py** - Model patching:
-- `apply_patch()`: Injects custom attention processors into FLUX transformer
-- Creates sliding window info with offsets: `offset = (image_size/num_tiles)/sliding_cycle * i`
-- Applies to both FluxTransformerBlock and FluxSingleTransformerBlock
-
-**customized_attention_processor.py** - Attention implementation:
-- Loads pre-computed masks from `mask_list/` at module import
-- Implements `FluxAttnProcessor2_0_for_transformerblock_global`
-- Supports both PyTorch and Triton implementations (switchable in code)
-
-**triton_code/** - GPU kernels:
-- `reloc_triton_kernel_bf16.py`: Main BF16 Triton kernel
-- `reloc_triton_kernel_parallel.py`: Parallel computation variant
-- `original_code.py`: Reference PyTorch implementation
+1. **Configuration** (`config.yaml`): num_tiles, sliding_cycle, method, prompts
+2. **Patching** (`patch.py`): Replaces transformer blocks' attention processors
+3. **Reordering** (`reorder_utils.py`): Hilbert curve reordering of image tokens + RoPE
+4. **Attention** (`customized_attention_processor.py`): Sparse attention via Triton kernels
+5. **Customized forward** (in `reorder_utils.py`): Replaces transformer's forward method
 
 ### Configuration Parameters
 
-The [config.yaml](reloc_attention/config.yaml) controls:
-- `num_tiles`: 4 or 16 (determines spatial partitioning)
+Each `config.yaml` controls:
+- `num_tiles`: 4 or 16 (spatial partitioning)
 - `sliding_cycle`: Number of offset patterns (typically 4)
-- `prompt_list`: Text prompts for generation
-- `seed_list`: Random seeds
-- `num_of_inference_steps`: Denoising steps (default 28)
-- `full_attn_step` / `full_attn_layer`: Which steps/layers use full attention instead of local
+- `method`: `"reorder_shared"` (default), `"reorder"`, or `"masking"`
+- `full_attn_step` / `full_attn_layer`: Steps/layers using full attention
 
 ### Image Size Support
-- **1024x1024**: Uses 4096 tokens (64×64 grid)
-- **2048x2048**: Uses 16384 tokens (128×128 grid)
-
-Masks are pre-computed for: `{4096, 16384} × {4, 16 tiles} × {multiple offsets}`
-
-## Current Development Branch
-
-Branch: `triton` (based on git status)
-
-Recent work focuses on Triton kernel optimizations:
-- Max distance sharing
-- Reorder operations with/without sharing
-- Kernel fusion
-- Pipeline parallelization
-
-## Important Implementation Notes
-
-### Mask System
-- Masks are pre-loaded at module import in customized_attention_processor.py
-- Mask key format: `{image_size}_{offset}_{num_tiles}` (e.g., "4096_256_4")
-- Must run `create_mask.py` if mask_list/ is empty (automatically handled by run_flux.sh)
-
-### Hilbert Curve Order
-The Hilbert curve utilities in [utils.py](reloc_attention/utils.py) and [pattern_utils.py](reloc_attention/pattern_utils.py) handle:
-- Forward mapping: spatial → Hilbert order
-- Inverse mapping: Hilbert → spatial order
-- Closed Hilbert curves for periodic patterns
+- **1024x1024**: 4096 tokens (64x64 grid) — all models
+- **2048x2048**: 16384 tokens (128x128 grid) — all models
 
 ### Sliding Window Mechanism
-Each transformer block gets assigned an offset based on its layer index:
-```python
-offset = (image_size // num_tiles) // sliding_cycle * (layer_idx % sliding_cycle)
-```
-This creates different attention patterns across layers.
+Each transformer block gets an offset: `offset = (image_size // num_tiles) // sliding_cycle * (layer_idx % sliding_cycle)`
 
-### Attention Processor Integration
-The custom attention processor is injected via:
-```python
-module.attn.processor = FluxAttnProcessor2_0_for_transformerblock_global()
-module.attn.processor._tome_info = info_dict  # Contains offset
-```
+## Evaluation Pipeline
+
+- `run_evaluation_flux2.py`: Batch generation from `coco_prompts.json`, supports `--start`, `--end`, `--batch_size`, resume (skips existing files)
+- `run_evaluation_flux2.sbatch`: SLURM job script (A100/H100/H200, 8 CPU, 32GB)
+- `submit_flux2_eval.sh`: Auto-submits N jobs with evenly divided ranges
 
 ## File Organization
 
 ```
-reloc_attention/
-├── run_flux.py              # Main inference script
-├── run_flux.sh              # Bash wrapper with environment setup
-├── config.yaml              # Configuration parameters
-├── patch.py                 # Model patching logic
-├── customized_attention_processor.py  # Custom attention implementation
-├── reorder_utils.py         # Hilbert curve reordering
-├── pattern_utils.py         # Hilbert pattern generation
-├── masking_utils.py         # Mask computation utilities
-├── create_mask.py           # Mask pre-computation script
-├── utils.py                 # Shared utilities
-├── mask_list/               # Pre-computed attention masks
-├── triton_code/             # Triton kernel implementations
-│   ├── reloc_triton_kernel_bf16.py
-│   ├── reloc_triton_kernel_parallel.py
-│   ├── benchmark.py
-│   └── test_*.py
-├── output/                  # Generated images with metadata
-└── penv/                    # Local Python environment
+├── reloc_attention/              # FLUX.1 implementation (original)
+│   ├── patch.py, customized_attention_processor.py, reorder_utils*.py
+│   ├── triton_code/              # Shared Triton kernels
+│   └── config.yaml
+├── flux2_hilberta/               # FLUX.2-klein adaptation
+│   ├── patch.py, customized_attention_processor.py, reorder_utils.py
+│   ├── triton_code -> ../reloc_attention/triton_code
+│   └── config.yaml
+├── run_evaluation_flux2.py       # Batch eval script
+├── run_evaluation_flux2.sbatch   # SLURM job
+├── submit_flux2_eval.sh          # Multi-GPU submitter
+└── coco_prompts.json             # Evaluation prompts
 ```
 
-## Working with Indices
+## Important Implementation Notes
 
-Pre-computed Hilbert indices are stored as `.pt` files:
-- `indices_4096_256.pt`: For 64×64 grids
-- `indices_16384_1024.pt`: For 128×128 grids
+### Attention Processor Integration
+Custom processors are injected via `patch.py`:
+```python
+module.attn.processor = CustomAttnProcessor()
+module.attn.processor._tome_info = {"args": {"offset": offset, ...}}
+```
 
-These can be regenerated using utilities in `recompute_indices/` if needed.
+### FLUX.2 Single-Stream Blocks
+Single-stream blocks need `num_txt_tokens` set on their processors before execution so the Triton kernel correctly identifies shared (text) vs local (image) regions. This is set dynamically in `customized_forward`.
+
+## Commit Style
+Use conventional prefixes: `[FEAT]`, `[FIX]`, `[PERF]`, `[DOCS]`

@@ -1,0 +1,18 @@
+# config.yaml for FLUX.2-klein HilbertA
+num_tiles: 4
+sliding_cycle: 4
+prompt_list: ["A beautiful landscape with mountains and a lake in the middle."]
+seed_list: [42, 43]
+num_of_inference_steps: 10
+guidance_scale: 1.0
+remark: "flux2_hilberta"
+output_folder: "./output/"
+full_attn_step: []
+full_attn_layer: []
+enable_profiler: false
+curve_type: "hilbert"
+method: "reorder_shared"  # Options: "masking" or "reorder" or "reorder_shared"
+cache_dir: null  # uses default ~/.cache/huggingface/
+model_repo: "black-forest-labs/FLUX.2-klein-9B"
+height: 1024
+width: 1024
