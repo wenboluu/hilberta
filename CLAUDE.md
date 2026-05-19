@@ -90,16 +90,17 @@ Each transformer block gets an offset: `offset = (image_size // num_tiles) // sl
 - `run_evaluation_flux2.py`: Baseline batch generation (no HilbertA patch)
 - `run_evaluation_flux2_lora.py`: LoRA + HilbertA masking batch generation, supports accelerate checkpoint loading
 - `run_evaluation_flux2_sparge.py`: SpargeAttn batch generation with configurable sparsity hyperparameters
-- `run_evaluation_flux2.sbatch` / `run_evaluation_flux2_lora.sbatch` / `run_evaluation_flux2_sparge.sbatch`: SLURM job scripts (A100, 8 CPU, 32GB)
-- `submit_flux2_eval.sh` / `submit_flux2_lora_eval.sh` / `submit_flux2_sparge_eval.sh`: Auto-submits N jobs with evenly divided ranges
+- `run_evaluation_flux2_clear.py`: CLEAR local window attention batch generation, loads DeepSpeed checkpoints
+- `run_evaluation_flux2*.sbatch`: SLURM job scripts (A100/H100/H200, 8 CPU, 32-64GB)
+- `submit_flux2_*_eval.sh`: Auto-submits N jobs with evenly divided ranges
 
 ### Quality Benchmarking
 - `benchmark/benchmark.sh <generated_dir> [baseline_dir]`: Runs FID (vs COCO test2017 stats), LPIPS, and CLIP similarity
 - `benchmark/compute_fid.py`, `benchmark/compute_lpips_clip.py`: Individual metric scripts
 
 ### Speed Benchmarking
-- `benchmark/benchmark_speed.py --mode kernel`: Kernel-only timing (captures real Q/K/V from pipeline, benchmarks SDPA vs HilbertA Triton vs SpargeAttn)
-- `benchmark/benchmark_speed.py --mode e2e`: End-to-end pipeline timing (baseline vs HilbertA reorder vs SpargeAttn)
+- `benchmark/benchmark_speed.py --mode kernel`: Kernel-only timing (captures real Q/K/V from pipeline, benchmarks SDPA vs HilbertA Triton vs SpargeAttn vs CLEAR)
+- `benchmark/benchmark_speed.py --mode e2e`: End-to-end pipeline timing (baseline vs HilbertA vs SpargeAttn vs CLEAR r=8/r=16)
 
 ## SpargeAttn Integration
 
@@ -108,6 +109,16 @@ SpargeAttn (block-sparse attention with INT8 Q/K quantization) is integrated as 
 - Build: `cd sparge && pip install --no-build-isolation -e .` (requires GPU node, CUDA 12.6 via conda)
 - Key hyperparameters: `simthreshd1` (block homogeneity gate), `cdfthreshd` (CDF block budget), `pvthreshd` (runtime pruning)
 - On A100 (SM 8.0): uses sageattn1 (INT8 Q/K + FP16 values); SM 8.9+ uses sageattn2 (FP8 values)
+
+## CLEAR Integration
+
+CLEAR (Conv-Like Linearization, NeurIPS 2025) uses local window attention via `flex_attention`:
+- `CLEAR/`: Cloned CLEAR repo with FLUX.2 adaptation
+- `attention_processor_flux2.py`: 4 processor classes (teacher/student × double/single stream)
+- `distill_flux2.py`: Distillation training with DeepSpeed ZeRO-2, 3-component loss
+- Training: `cd CLEAR && WINDOW_SIZE=8 bash distill_flux2.sh` (2 GPUs, Prodigy optimizer)
+- Evaluation: `bash submit_flux2_clear_eval.sh 5 5000 10 8 CLEAR/exp_output_w8/checkpoint-3000`
+- Window sizes: r=8 (most aggressive), r=16, r=32; each requires separate training
 
 ## File Organization
 
@@ -124,12 +135,16 @@ SpargeAttn (block-sparse attention with INT8 Q/K quantization) is integrated as 
 │   └── config.yaml
 ├── sparge/                       # SpargeAttn baseline comparison
 │   └── evaluate/modify_model/modify_flux2.py  # FLUX.2 adaptation
+├── CLEAR/                        # CLEAR local window attention baseline
+│   ├── attention_processor_flux2.py  # FLUX.2 local window processors
+│   ├── distill_flux2.py          # Distillation training script
+│   ├── inference_flux2.py        # Inference smoke test
+│   └── deepspeed_config.yaml     # ZeRO-2 config (2 GPUs)
 ├── run_evaluation_flux2.py       # Baseline batch eval
 ├── run_evaluation_flux2_lora.py  # LoRA + HilbertA batch eval
 ├── run_evaluation_flux2_sparge.py # SpargeAttn batch eval
-├── submit_flux2_eval.sh          # Multi-GPU submitter (baseline)
-├── submit_flux2_lora_eval.sh     # Multi-GPU submitter (LoRA)
-├── submit_flux2_sparge_eval.sh   # Multi-GPU submitter (SpargeAttn)
+├── run_evaluation_flux2_clear.py # CLEAR batch eval
+├── submit_flux2_*_eval.sh        # Multi-GPU submitters
 ├── benchmark/                    # FID, LPIPS, CLIP, speed benchmarks
 └── coco_prompts.json             # Evaluation prompts
 ```

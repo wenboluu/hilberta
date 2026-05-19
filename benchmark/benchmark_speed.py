@@ -1,8 +1,8 @@
 """
-Speed Benchmark: HilbertA vs SpargeAttn vs SDPA (baseline)
+Speed Benchmark: Baseline vs HilbertA vs SpargeAttn vs CLEAR
 
 Two modes:
-  --mode kernel   Benchmark attention kernels with random Q/K/V
+  --mode kernel   Benchmark attention kernels with real Q/K/V from pipeline
   --mode e2e      Full FLUX.2-klein inference pipeline timing
 
 Usage:
@@ -63,7 +63,7 @@ def wall_timer(fn, num_warmup=2, num_iters=5):
     return times[len(times) // 2]
 
 
-# ── Kernel benchmark ──
+# ── Capture real Q/K/V ──
 
 def capture_real_qkv(device="cuda:0"):
     """Run one inference step and capture Q/K/V from a double-stream block."""
@@ -124,9 +124,12 @@ def capture_real_qkv(device="cuda:0"):
 
     q, k, v = captured['q'], captured['k'], captured['v']
     del pipe, captured
+    gc.collect()
     torch.cuda.empty_cache()
     return q, k, v
 
+
+# ── Kernel benchmark ──
 
 def benchmark_kernel(args):
     device = "cuda:0"
@@ -161,10 +164,10 @@ def benchmark_kernel(args):
         local_group = N_CTX_4t // 4
         sparse_pairs = N_CTX_shared_4t * L + N_CTX_4t * (N_CTX_shared_4t + local_group)
         sparsity = 1.0 - sparse_pairs / (L * L)
-        results.append(("HilbertA-4t-shared", ms, sparsity))
-        print(f"  HilbertA-4t-shared: {ms:.3f}ms")
+        results.append(("HilbertA-4t", ms, sparsity))
+        print(f"  HilbertA-4t: {ms:.3f}ms")
     except RuntimeError as e:
-        print(f"  HilbertA-4t-shared: SKIPPED ({e})")
+        print(f"  HilbertA-4t: SKIPPED ({e})")
 
     # 16t: reorder (text only as shared, no center)
     N_CTX_shared_16t = seq_txt
@@ -187,13 +190,45 @@ def benchmark_kernel(args):
         q, k, v, simthreshd1=-0.3, cdfthreshd=0.85, pvthreshd=0.0,
         tensor_layout="HND", attention_sink=True, return_sparsity=False,
     ))
-    # Get sparsity from one call
     _, sparge_sparsity = spas_sage_attn_meansim_cuda(
         q, k, v, simthreshd1=-0.3, cdfthreshd=0.85, pvthreshd=0.0,
         tensor_layout="HND", attention_sink=True, return_sparsity=True,
     )
     results.append(("SpargeAttn", sparge_ms, sparge_sparsity))
     print(f"  SpargeAttn: {sparge_ms:.3f}ms")
+
+    # 4. CLEAR local window attention (r=8 and r=16)
+    clear_dir = os.path.join(ROOT, "CLEAR")
+    sys.path.insert(0, clear_dir)
+    from attention_processor_flux2 import init_local_mask_flex
+    from torch.nn.attention.flex_attention import flex_attention
+    from functools import partial
+
+    img_h = img_w = int(seq_img ** 0.5)  # 64 for 4096 tokens
+
+    for window_size in [8, 16]:
+        # Re-init mask for each window size (lru_cache handles dedup)
+        init_local_mask_flex(img_h, img_w, text_length=seq_txt,
+                             window_size=window_size, device=device)
+        from attention_processor_flux2 import BLOCK_MASK
+        flex_fn = torch.compile(partial(flex_attention, block_mask=BLOCK_MASK), dynamic=False)
+
+        # flex_attention expects [B, H, S, D]
+        try:
+            ms = cuda_timer(lambda: flex_fn(q, k, v))
+            # Theoretical sparsity for circular window
+            # Approximate: window covers pi*r^2 tokens out of img_h*img_w
+            window_area = min(math.pi * window_size ** 2, seq_img)
+            # Each image token attends to: text (512) + window_area image tokens
+            # Text tokens attend to everything
+            img_pairs = seq_img * (seq_txt + window_area)
+            txt_pairs = seq_txt * L
+            sparsity = 1.0 - (img_pairs + txt_pairs) / (L * L)
+            sparsity = max(0.0, sparsity)
+            results.append((f"CLEAR-r{window_size}", ms, sparsity))
+            print(f"  CLEAR-r{window_size}: {ms:.3f}ms")
+        except RuntimeError as e:
+            print(f"  CLEAR-r{window_size}: SKIPPED ({e})")
 
     # Summary
     print(f"\n{'Method':<20} {'Time(ms)':>10} {'Speedup':>9} {'Sparsity':>10}")
@@ -240,7 +275,6 @@ def benchmark_e2e(args):
     for num_tiles, method, label in [(4, "reorder_shared", "HilbertA-4t"), (16, "reorder", "HilbertA-16t")]:
         print(f"  Loading {label} ({method})...")
 
-        # Update config.yaml
         with open(config_path, 'r') as f:
             cfg = yaml.safe_load(f)
         orig_method, orig_tiles = cfg['method'], cfg['num_tiles']
@@ -249,7 +283,6 @@ def benchmark_e2e(args):
         with open(config_path, 'w') as f:
             yaml.dump(cfg, f, default_flow_style=False)
 
-        # Reload modules to pick up new config
         import customized_attention_processor as cap
         import patch as hilbert_patch
         import reorder_utils as ru
@@ -266,9 +299,9 @@ def benchmark_e2e(args):
         results.append((label, s))
         print(f"  {label}: {s:.2f}s")
         del pipe
+        gc.collect()
         torch.cuda.empty_cache()
 
-        # Restore config
         cfg['method'] = orig_method
         cfg['num_tiles'] = orig_tiles
         with open(config_path, 'w') as f:
@@ -286,9 +319,7 @@ def benchmark_e2e(args):
     os.environ["TUNE_MODE"] = ""
     set_spas_sage_attn_flux2(pipe.transformer)
 
-    # Initialize hyperparams
     import torch.nn as nn
-    from spas_sage_attn.autotune import SparseAttentionMeansim
     for block in list(pipe.transformer.transformer_blocks) + list(pipe.transformer.single_transformer_blocks):
         if hasattr(block.attn, 'inner_attention'):
             m = block.attn.inner_attention
@@ -306,6 +337,40 @@ def benchmark_e2e(args):
     del pipe
     gc.collect()
     torch.cuda.empty_cache()
+
+    # 4. CLEAR local window attention (r=8 and r=16)
+    clear_dir = os.path.join(ROOT, "CLEAR")
+    sys.path.insert(0, clear_dir)
+    from attention_processor_flux2 import (
+        LocalFlexFlux2AttnProcessor,
+        LocalFlexFlux2SingleAttnProcessor,
+        init_local_mask_flex,
+    )
+
+    for window_size in [8, 16]:
+        print(f"  Loading CLEAR-r{window_size}...")
+        init_local_mask_flex(64, 64, text_length=512,
+                             window_size=window_size, device=device)
+
+        pipe = Flux2KleinPipeline.from_pretrained(
+            "black-forest-labs/FLUX.2-klein-9B", torch_dtype=torch.bfloat16
+        ).to(device)
+
+        count = 0
+        for name, module in pipe.transformer.named_modules():
+            if hasattr(module, 'processor') and hasattr(module, 'heads'):
+                if 'single' in name:
+                    module.processor = LocalFlexFlux2SingleAttnProcessor()
+                else:
+                    module.processor = LocalFlexFlux2AttnProcessor()
+                count += 1
+
+        s = wall_timer(lambda: pipe(**gen_kwargs))
+        results.append((f"CLEAR-r{window_size}", s))
+        print(f"  CLEAR-r{window_size}: {s:.2f}s")
+        del pipe
+        gc.collect()
+        torch.cuda.empty_cache()
 
     # Summary
     print(f"\n{'Method':<20} {'Time(s)':>10} {'Speedup':>9}")
@@ -327,5 +392,5 @@ if __name__ == "__main__":
         print("=== Kernel Benchmark (1024x1024) ===")
         benchmark_kernel(args)
     else:
-        print("=== End-to-End Benchmark (1024x1024, 10 steps) ===")
+        print("=== End-to-End Benchmark (1024x1024, 30 steps) ===")
         benchmark_e2e(args)

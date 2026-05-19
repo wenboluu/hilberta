@@ -44,16 +44,21 @@ python benchmark/benchmark_speed.py --mode kernel
 python benchmark/benchmark_speed.py --mode e2e
 ```
 
-## SpargeAttn Comparison
+## Baseline Comparisons
 
-SpargeAttn (block-sparse attention with INT8 quantization) is included as a baseline comparison in `sparge/`.
-
+### SpargeAttn (block-sparse, INT8 quantization)
 ```bash
-# Build CUDA extensions (requires GPU node)
 cd sparge && pip install --no-build-isolation -e .
-
-# Run SpargeAttn evaluation (5 GPUs, 5000 images)
 bash submit_flux2_sparge_eval.sh 5 5000 10 -0.3 0.85 0.0 output/flux2_sparge_eval
+```
+
+### CLEAR (local window attention, NeurIPS 2025)
+```bash
+# Training (DeepSpeed ZeRO-2, 2 GPUs)
+cd CLEAR && WINDOW_SIZE=8 bash distill_flux2.sh
+
+# Evaluation
+bash submit_flux2_clear_eval.sh 5 5000 10 8 CLEAR/exp_output_w8/checkpoint-3000 output/flux2_clear_eval
 ```
 
 ## Project Structure
@@ -62,13 +67,12 @@ bash submit_flux2_sparge_eval.sh 5 5000 10 -0.3 0.85 0.0 output/flux2_sparge_eva
 ├── reloc_attention/          # FLUX.1 relocated attention (original)
 ├── flux2_hilberta/           # FLUX.2-klein adaptation
 ├── sparge/                   # SpargeAttn baseline comparison
+├── CLEAR/                    # CLEAR local window attention baseline
 ├── run_evaluation_flux2.py        # Baseline batch eval (no HilbertA)
 ├── run_evaluation_flux2_lora.py   # LoRA + HilbertA batch eval
 ├── run_evaluation_flux2_sparge.py # SpargeAttn batch eval
-├── run_evaluation_flux2*.sbatch   # SLURM job scripts
-├── submit_flux2_eval.sh           # Multi-GPU submitter (baseline)
-├── submit_flux2_lora_eval.sh      # Multi-GPU submitter (LoRA)
-├── submit_flux2_sparge_eval.sh    # Multi-GPU submitter (SpargeAttn)
+├── run_evaluation_flux2_clear.py  # CLEAR batch eval
+├── submit_flux2_*_eval.sh         # Multi-GPU submitters
 ├── benchmark/                     # FID, LPIPS, CLIP, speed benchmarks
 └── coco_prompts.json              # COCO evaluation prompts
 ```

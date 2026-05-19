@@ -1,5 +1,31 @@
 # Progress Log
 
+## v0.12 — CLEAR Local Window Attention Adaptation and Unified Benchmarking
+
+**Date:** 2026-03-28
+
+**Changes:**
+- Adapted CLEAR (Conv-Like Linearization, NeurIPS 2025) local window attention for FLUX.2-klein
+  - Created `CLEAR/attention_processor_flux2.py` with 4 FLUX.2-specific processor classes (teacher/student × double/single stream)
+  - Local attention mask via `flex_attention` with circular distance: tokens attend within window_size radius
+  - Distillation output collection with `.detach()` for gradient checkpointing compatibility
+- Created CLEAR distillation training pipeline (`CLEAR/distill_flux2.py`)
+  - 3-component loss: loss_fm + 0.5*loss_distill + 0.5*loss_attn (loss_attn monitoring-only due to gradient checkpointing)
+  - DeepSpeed ZeRO-2 for optimizer state sharding across GPUs
+  - Trains attention weights (to_q/k/v/out) with Prodigy optimizer, lr=1.0
+  - Reuses HilbertA's cached data loader (t2i_1024/)
+- Created CLEAR inference script (`CLEAR/inference_flux2.py`) for smoke testing
+- Created CLEAR batch evaluation pipeline: `run_evaluation_flux2_clear.py` + `.sbatch` + `submit_flux2_clear_eval.sh`
+  - Loads trained attention weights from DeepSpeed checkpoints
+- Extended speed benchmark (`benchmark/benchmark_speed.py`) to include CLEAR r=8 and r=16
+  - Kernel benchmark: SDPA, HilbertA-4t, HilbertA-16t, SpargeAttn, CLEAR-r8, CLEAR-r16
+  - E2E benchmark: all 6 configurations with 30-step inference
+
+**Known Issues:**
+- CLEAR's loss_attn cannot flow gradients with gradient checkpointing (fundamental incompatibility between checkpoint tensor invalidation and intermediate output collection). Detached as monitoring metric.
+- CLEAR original distill.py has the same bug — its custom transformer_flux.py is dead code never imported by distill.py
+- Flux2Transformer2DModel's `attn_processors` property returns empty dict; use `named_modules()` iteration instead
+
 ## v0.11 — SpargeAttn FLUX.2 Adaptation and Speed Benchmarking
 
 **Date:** 2026-03-28
