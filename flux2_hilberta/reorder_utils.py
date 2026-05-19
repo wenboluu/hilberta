@@ -293,11 +293,14 @@ def customized_forward(
     step: int = 0,
 ) -> Union[torch.FloatTensor, "Transformer2DModelOutput"]:
     """Customized forward for Flux2Transformer2DModel with Hilbert reordering."""
-    import os as _os
-    _script_dir = _os.path.dirname(_os.path.abspath(__file__))
-    with open(_os.path.join(_script_dir, "config.yaml"), 'r') as f:
-        config = yaml.safe_load(f)
+    # Use cached config (loaded once at module import, not every forward call)
+    if not hasattr(customized_forward, '_config'):
+        import os as _os
+        _script_dir = _os.path.dirname(_os.path.abspath(__file__))
+        with open(_os.path.join(_script_dir, "config.yaml"), 'r') as f:
+            customized_forward._config = yaml.safe_load(f)
 
+    config = customized_forward._config
     num_tiles = config.get('num_tiles', 4)
     method = config.get('method', 'reorder_shared')
     full_attn_step = config.get('full_attn_step', [])

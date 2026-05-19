@@ -75,7 +75,7 @@ Each model has its own directory with adapted versions of the core components:
 Each `config.yaml` controls:
 - `num_tiles`: 4 or 16 (spatial partitioning)
 - `sliding_cycle`: Number of offset patterns (typically 4)
-- `method`: `"reorder_shared"` (default), `"reorder"`, or `"masking"`
+- `method`: `"reorder_shared"` (default), `"reorder"`, `"masking"`, or `"masking_seam"`
 - `full_attn_step` / `full_attn_layer`: Steps/layers using full attention
 
 ### Image Size Support
@@ -87,9 +87,15 @@ Each transformer block gets an offset: `offset = (image_size // num_tiles) // sl
 
 ## Evaluation Pipeline
 
-- `run_evaluation_flux2.py`: Batch generation from `coco_prompts.json`, supports `--start`, `--end`, `--batch_size`, resume (skips existing files)
-- `run_evaluation_flux2.sbatch`: SLURM job script (A100/H100/H200, 8 CPU, 32GB)
-- `submit_flux2_eval.sh`: Auto-submits N jobs with evenly divided ranges
+- `run_evaluation_flux2.py`: Baseline batch generation (no HilbertA patch)
+- `run_evaluation_flux2_lora.py`: LoRA + HilbertA masking batch generation, supports accelerate checkpoint loading
+- `run_evaluation_flux2.sbatch` / `run_evaluation_flux2_lora.sbatch`: SLURM job scripts (A100/H100/H200, 8 CPU, 32GB)
+- `submit_flux2_eval.sh` / `submit_flux2_lora_eval.sh`: Auto-submits N jobs with evenly divided ranges
+- Both sbatch scripts support configurable output directory as the last positional argument
+
+### Benchmarking
+- `benchmark/benchmark.sh <generated_dir> [baseline_dir]`: Runs FID (vs COCO test2017 stats), LPIPS, and CLIP similarity
+- `benchmark/compute_fid.py`, `benchmark/compute_lpips_clip.py`: Individual metric scripts
 
 ## File Organization
 
@@ -100,11 +106,15 @@ Each transformer block gets an offset: `offset = (image_size // num_tiles) // sl
 │   └── config.yaml
 ├── flux2_hilberta/               # FLUX.2-klein adaptation
 │   ├── patch.py, customized_attention_processor.py, reorder_utils.py
+│   ├── masking_utils.py          # Hilbert tile mask creation
+│   ├── training/                 # LoRA distillation training
 │   ├── triton_code -> ../reloc_attention/triton_code
 │   └── config.yaml
-├── run_evaluation_flux2.py       # Batch eval script
-├── run_evaluation_flux2.sbatch   # SLURM job
-├── submit_flux2_eval.sh          # Multi-GPU submitter
+├── run_evaluation_flux2.py       # Baseline batch eval
+├── run_evaluation_flux2_lora.py  # LoRA + HilbertA batch eval
+├── submit_flux2_eval.sh          # Multi-GPU submitter (baseline)
+├── submit_flux2_lora_eval.sh     # Multi-GPU submitter (LoRA)
+├── benchmark/                    # FID, LPIPS, CLIP benchmark suite
 └── coco_prompts.json             # Evaluation prompts
 ```
 

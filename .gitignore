@@ -24,3 +24,26 @@ reloc_attention/__MACOSX/
 *$py.class
 
 lora_weight/
+
+# FLUX.2 HilbertA
+flux2_hilberta/output/
+flux2_hilberta/training/exp_output/
+flux2_hilberta/training/logs/
+flux2_hilberta/training/wandb/
+flux2_hilberta/.omc/
+
+# Evaluation
+logs/
+t2i_1024/
+
+# Generated images
+*.png
+
+# OMC state
+.omc/
+
+# IDE
+.vscode/
+
+# Slurm logs
+slurm-*.out

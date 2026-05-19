@@ -39,12 +39,13 @@ bash submit_flux2_eval.sh 5
 ```
 ├── reloc_attention/          # FLUX.1 relocated attention (original)
 ├── flux2_hilberta/           # FLUX.2-klein adaptation
-├── run_evaluation_flux2.py   # Batch evaluation script (COCO prompts)
-├── run_evaluation_flux2.sbatch  # SLURM job script
-├── submit_flux2_eval.sh      # Multi-GPU job submitter
-├── run_flux2.py              # FLUX.2-klein quick test script
-├── run_qwen_img.py           # Qwen-Image quick test script
-└── coco_prompts.json         # COCO evaluation prompts
+├── run_evaluation_flux2.py        # Baseline batch eval (no HilbertA)
+├── run_evaluation_flux2_lora.py   # LoRA + HilbertA batch eval
+├── run_evaluation_flux2*.sbatch   # SLURM job scripts
+├── submit_flux2_eval.sh           # Multi-GPU submitter (baseline)
+├── submit_flux2_lora_eval.sh      # Multi-GPU submitter (LoRA)
+├── benchmark/                     # FID, LPIPS, CLIP benchmark suite
+└── coco_prompts.json              # COCO evaluation prompts
 ```
 
 ## Environment
@@ -59,4 +60,23 @@ Configured via `config.yaml` → `method`:
 
 - **`reorder_shared`** (default): Hilbert reorder with center region as shared global attention
 - **`reorder`**: Simple Hilbert reorder, all image tokens local
-- **`masking`**: Pre-computed boolean attention masks
+- **`masking`**: Pre-computed boolean attention masks (Hilbert tiles + spatial center)
+- **`masking_seam`**: Masking + seam attention — allows boundary tokens at tile edges to cross-attend
+
+## LoRA Distillation Training & Evaluation
+
+### Training
+```bash
+cd flux2_hilberta/training && bash train.sh
+```
+
+### LoRA Evaluation (batch generation)
+```bash
+# 5 GPUs, 5000 images, checkpoint-2500, 10 inference steps
+bash submit_flux2_lora_eval.sh 5 5000 flux2_hilberta/training/exp_output/checkpoint-2500 10
+```
+
+### Benchmarking (FID / LPIPS / CLIP)
+```bash
+bash benchmark/benchmark.sh output/flux2_lora_eval_checkpoint-2500_10steps output/flux2_eval_10steps
+```

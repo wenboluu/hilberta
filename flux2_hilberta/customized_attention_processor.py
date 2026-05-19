@@ -13,14 +13,61 @@ import torch
 import torch.nn.functional as F
 
 from utils import apply_rotary_emb
+from masking_utils import create_hilbert_tile_mask
 
 # Load config at module import
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.yaml'), 'r') as _f:
     _config = yaml.safe_load(_f)
 
 _method = _config.get('method', 'reorder_shared').lower()
-if _method not in ['masking', 'reorder', 'reorder_shared']:
-    raise ValueError("config.method must be 'masking', 'reorder', or 'reorder_shared'")
+if _method not in ['masking', 'masking_seam', 'reorder', 'reorder_shared']:
+    raise ValueError("config.method must be 'masking', 'masking_seam', 'reorder', or 'reorder_shared'")
+
+# Pre-compute masks for masking method (cached by full seq len, offset, num_tiles)
+_mask_cache = {}       # hilbert mask only: {cache_key: [seq_img, seq_img]}
+_full_mask_cache = {}  # full mask with text region: {cache_key: [L, L]}
+
+# --- Seam mask: allow boundary tokens to attend across tile edges ---
+_seam_mask_cache = {}  # {seq_img: [seq_img, seq_img] bool tensor}
+
+
+def _compute_seam_mask(H, W, vertical_seams, horizontal_seams, band=1):
+    """Compute a boolean mask allowing cross-tile attention at spatial seam boundaries."""
+    N = H * W
+    seam = torch.zeros(N, N, dtype=torch.bool)
+    rows = torch.arange(H)
+    cols = torch.arange(W)
+    R, C = torch.meshgrid(rows, cols, indexing="ij")
+    flat = (R * W + C).reshape(-1)
+
+    for s in vertical_seams:
+        left = flat[((C >= s - band) & (C < s)).reshape(-1)]
+        right = flat[((C >= s) & (C < s + band)).reshape(-1)]
+        seam[left[:, None], right[None, :]] = True
+        seam[right[:, None], left[None, :]] = True
+
+    for s in horizontal_seams:
+        top = flat[((R >= s - band) & (R < s)).reshape(-1)]
+        bot = flat[((R >= s) & (R < s + band)).reshape(-1)]
+        seam[top[:, None], bot[None, :]] = True
+        seam[bot[:, None], top[None, :]] = True
+
+    return seam
+
+
+def _get_seam_mask(seq_img, device):
+    """Get or compute the seam mask for a given image sequence length."""
+    if seq_img not in _seam_mask_cache:
+        if seq_img == 4096:
+            # 64x64 grid, 4 tiles -> seams at columns 16,32,48 and row 32
+            mask = _compute_seam_mask(64, 64, vertical_seams=[16, 32, 48], horizontal_seams=[32], band=1)
+        elif seq_img == 16384:
+            # 128x128 grid, 4 tiles -> seams at columns 32,64,96 and row 64
+            mask = _compute_seam_mask(128, 128, vertical_seams=[32, 64, 96], horizontal_seams=[64], band=1)
+        else:
+            raise ValueError(f"Unsupported image seq len {seq_img} for seam mask")
+        _seam_mask_cache[seq_img] = mask.to(device)
+    return _seam_mask_cache[seq_img]
 
 
 def _get_qkv_projections(attn, hidden_states, encoder_hidden_states=None):
@@ -101,11 +148,43 @@ class Flux2HilbertAttnProcessor:
         use_full_attn = (step in full_attn_step) or (layer_idx in full_attn_layer)
         offset = self._tome_info["args"]["offset"] if hasattr(self, '_tome_info') else 0
 
-        if use_full_attn or _method == "masking":
-            # Full attention via SDPA
+        if use_full_attn:
+            # Full attention via SDPA (no mask)
             out = F.scaled_dot_product_attention(
                 query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2),
                 attn_mask=attention_mask, dropout_p=0.0, is_causal=False,
+            )
+            out = out.transpose(1, 2).flatten(2, 3)
+
+        elif _method in ("masking", "masking_seam"):
+            # Masking-based sparse attention via SDPA with pre-computed Hilbert mask
+            seq_txt = encoder_hidden_states.shape[1] if encoder_hidden_states is not None else 0
+            L = query.shape[1]
+            seq_img = L - seq_txt
+
+            seam_suffix = "_seam" if _method == "masking_seam" else ""
+            full_key = f'{L}_{seq_txt}_{offset}_{num_of_tiles}{seam_suffix}'
+            if full_key not in _full_mask_cache:
+                hilbert_key = f'{seq_img}_{offset}_{num_of_tiles}'
+                if hilbert_key not in _mask_cache:
+                    _mask_cache[hilbert_key] = create_hilbert_tile_mask(
+                        torch.empty(1, seq_img, device=query.device), num_of_tiles, offset
+                    )
+                full_mask = torch.zeros(L, L, dtype=torch.bfloat16, device=query.device)
+                hilbert_mask = _mask_cache[hilbert_key].to(query.device, torch.bfloat16)
+                if _method == "masking_seam":
+                    # OR seam mask: allow boundary tokens to attend across tile edges
+                    seam = _get_seam_mask(seq_img, query.device)
+                    # hilbert_mask is 0/-inf format; seam is bool. Where seam is True, set to 0 (allow).
+                    hilbert_mask = hilbert_mask.clone()
+                    hilbert_mask[seam] = 0.0
+                full_mask[-seq_img:, -seq_img:] = hilbert_mask
+                _full_mask_cache[full_key] = full_mask
+            attn_mask = _full_mask_cache[full_key].to(query.dtype)
+
+            out = F.scaled_dot_product_attention(
+                query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2),
+                attn_mask=attn_mask, dropout_p=0.0, is_causal=False,
             )
             out = out.transpose(1, 2).flatten(2, 3)
 
@@ -211,10 +290,40 @@ class Flux2HilbertSingleAttnProcessor:
         use_full_attn = (step in full_attn_step) or (layer_idx in full_attn_layer)
         offset = self._tome_info["args"]["offset"] if hasattr(self, '_tome_info') else 0
 
-        if use_full_attn or _method == "masking":
+        if use_full_attn:
             attn_output = F.scaled_dot_product_attention(
                 query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2),
                 attn_mask=attention_mask, dropout_p=0.0, is_causal=False,
+            )
+            attn_output = attn_output.transpose(1, 2).flatten(2, 3)
+
+        elif _method in ("masking", "masking_seam"):
+            # Single-stream: hidden_states is [text, image] concatenated
+            num_txt = self._tome_info["args"].get("num_txt_tokens", 0)
+            L = query.shape[1]
+            seq_img = L - num_txt
+
+            seam_suffix = "_seam" if _method == "masking_seam" else ""
+            full_key = f'{L}_{num_txt}_{offset}_{num_of_tiles}{seam_suffix}'
+            if full_key not in _full_mask_cache:
+                hilbert_key = f'{seq_img}_{offset}_{num_of_tiles}'
+                if hilbert_key not in _mask_cache:
+                    _mask_cache[hilbert_key] = create_hilbert_tile_mask(
+                        torch.empty(1, seq_img, device=query.device), num_of_tiles, offset
+                    )
+                full_mask = torch.zeros(L, L, dtype=torch.bfloat16, device=query.device)
+                hilbert_mask = _mask_cache[hilbert_key].to(query.device, torch.bfloat16)
+                if _method == "masking_seam":
+                    seam = _get_seam_mask(seq_img, query.device)
+                    hilbert_mask = hilbert_mask.clone()
+                    hilbert_mask[seam] = 0.0
+                full_mask[-seq_img:, -seq_img:] = hilbert_mask
+                _full_mask_cache[full_key] = full_mask
+            attn_mask = _full_mask_cache[full_key].to(query.dtype)
+
+            attn_output = F.scaled_dot_product_attention(
+                query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2),
+                attn_mask=attn_mask, dropout_p=0.0, is_causal=False,
             )
             attn_output = attn_output.transpose(1, 2).flatten(2, 3)
 

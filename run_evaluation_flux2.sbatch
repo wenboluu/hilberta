@@ -16,6 +16,8 @@
 # ── Prompt interval (change these to run a specific range) ──
 START=${1:-0}
 END=${2:-5000}
+NUM_STEPS=${3:-4}
+OUT_DIR=${4:-"output/flux2_eval"}
 
 echo "=== FLUX.2-klein Evaluation ==="
 echo "Prompt range: ${START} to ${END}"
@@ -34,7 +36,8 @@ python run_evaluation_flux2.py \
     --start ${START} \
     --end ${END} \
     --prompt_file coco_prompts.json \
-    --output_dir output/flux2_eval \
+    --output_dir ${OUT_DIR} \
+    --num_inference_steps ${NUM_STEPS} \
     --seed 42 \
     --height 1024 \
     --width 1024 \

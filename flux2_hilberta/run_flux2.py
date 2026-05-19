@@ -23,7 +23,6 @@ def clean_memory():
     torch.cuda.empty_cache()
     gc.collect()
 
-
 def load_config(config_path):
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
