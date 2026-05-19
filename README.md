@@ -34,17 +34,42 @@ cd flux2_hilberta && bash run_flux2.sh
 bash submit_flux2_eval.sh 5
 ```
 
+## Speed Benchmarking
+
+```bash
+# Kernel-only benchmark (SDPA vs HilbertA Triton vs SpargeAttn)
+python benchmark/benchmark_speed.py --mode kernel
+
+# End-to-end pipeline benchmark
+python benchmark/benchmark_speed.py --mode e2e
+```
+
+## SpargeAttn Comparison
+
+SpargeAttn (block-sparse attention with INT8 quantization) is included as a baseline comparison in `sparge/`.
+
+```bash
+# Build CUDA extensions (requires GPU node)
+cd sparge && pip install --no-build-isolation -e .
+
+# Run SpargeAttn evaluation (5 GPUs, 5000 images)
+bash submit_flux2_sparge_eval.sh 5 5000 10 -0.3 0.85 0.0 output/flux2_sparge_eval
+```
+
 ## Project Structure
 
 ```
 ├── reloc_attention/          # FLUX.1 relocated attention (original)
 ├── flux2_hilberta/           # FLUX.2-klein adaptation
+├── sparge/                   # SpargeAttn baseline comparison
 ├── run_evaluation_flux2.py        # Baseline batch eval (no HilbertA)
 ├── run_evaluation_flux2_lora.py   # LoRA + HilbertA batch eval
+├── run_evaluation_flux2_sparge.py # SpargeAttn batch eval
 ├── run_evaluation_flux2*.sbatch   # SLURM job scripts
 ├── submit_flux2_eval.sh           # Multi-GPU submitter (baseline)
 ├── submit_flux2_lora_eval.sh      # Multi-GPU submitter (LoRA)
-├── benchmark/                     # FID, LPIPS, CLIP benchmark suite
+├── submit_flux2_sparge_eval.sh    # Multi-GPU submitter (SpargeAttn)
+├── benchmark/                     # FID, LPIPS, CLIP, speed benchmarks
 └── coco_prompts.json              # COCO evaluation prompts
 ```
 

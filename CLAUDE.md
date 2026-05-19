@@ -89,13 +89,25 @@ Each transformer block gets an offset: `offset = (image_size // num_tiles) // sl
 
 - `run_evaluation_flux2.py`: Baseline batch generation (no HilbertA patch)
 - `run_evaluation_flux2_lora.py`: LoRA + HilbertA masking batch generation, supports accelerate checkpoint loading
-- `run_evaluation_flux2.sbatch` / `run_evaluation_flux2_lora.sbatch`: SLURM job scripts (A100/H100/H200, 8 CPU, 32GB)
-- `submit_flux2_eval.sh` / `submit_flux2_lora_eval.sh`: Auto-submits N jobs with evenly divided ranges
-- Both sbatch scripts support configurable output directory as the last positional argument
+- `run_evaluation_flux2_sparge.py`: SpargeAttn batch generation with configurable sparsity hyperparameters
+- `run_evaluation_flux2.sbatch` / `run_evaluation_flux2_lora.sbatch` / `run_evaluation_flux2_sparge.sbatch`: SLURM job scripts (A100, 8 CPU, 32GB)
+- `submit_flux2_eval.sh` / `submit_flux2_lora_eval.sh` / `submit_flux2_sparge_eval.sh`: Auto-submits N jobs with evenly divided ranges
 
-### Benchmarking
+### Quality Benchmarking
 - `benchmark/benchmark.sh <generated_dir> [baseline_dir]`: Runs FID (vs COCO test2017 stats), LPIPS, and CLIP similarity
 - `benchmark/compute_fid.py`, `benchmark/compute_lpips_clip.py`: Individual metric scripts
+
+### Speed Benchmarking
+- `benchmark/benchmark_speed.py --mode kernel`: Kernel-only timing (captures real Q/K/V from pipeline, benchmarks SDPA vs HilbertA Triton vs SpargeAttn)
+- `benchmark/benchmark_speed.py --mode e2e`: End-to-end pipeline timing (baseline vs HilbertA reorder vs SpargeAttn)
+
+## SpargeAttn Integration
+
+SpargeAttn (block-sparse attention with INT8 Q/K quantization) is integrated as a comparison baseline:
+- `sparge/`: Cloned SpargeAttn repo with FLUX.2 adaptation in `evaluate/modify_model/modify_flux2.py`
+- Build: `cd sparge && pip install --no-build-isolation -e .` (requires GPU node, CUDA 12.6 via conda)
+- Key hyperparameters: `simthreshd1` (block homogeneity gate), `cdfthreshd` (CDF block budget), `pvthreshd` (runtime pruning)
+- On A100 (SM 8.0): uses sageattn1 (INT8 Q/K + FP16 values); SM 8.9+ uses sageattn2 (FP8 values)
 
 ## File Organization
 
@@ -110,11 +122,15 @@ Each transformer block gets an offset: `offset = (image_size // num_tiles) // sl
 │   ├── training/                 # LoRA distillation training
 │   ├── triton_code -> ../reloc_attention/triton_code
 │   └── config.yaml
+├── sparge/                       # SpargeAttn baseline comparison
+│   └── evaluate/modify_model/modify_flux2.py  # FLUX.2 adaptation
 ├── run_evaluation_flux2.py       # Baseline batch eval
 ├── run_evaluation_flux2_lora.py  # LoRA + HilbertA batch eval
+├── run_evaluation_flux2_sparge.py # SpargeAttn batch eval
 ├── submit_flux2_eval.sh          # Multi-GPU submitter (baseline)
 ├── submit_flux2_lora_eval.sh     # Multi-GPU submitter (LoRA)
-├── benchmark/                    # FID, LPIPS, CLIP benchmark suite
+├── submit_flux2_sparge_eval.sh   # Multi-GPU submitter (SpargeAttn)
+├── benchmark/                    # FID, LPIPS, CLIP, speed benchmarks
 └── coco_prompts.json             # Evaluation prompts
 ```
 

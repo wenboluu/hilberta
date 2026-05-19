@@ -1,5 +1,24 @@
 # Progress Log
 
+## v0.11 — SpargeAttn FLUX.2 Adaptation and Speed Benchmarking
+
+**Date:** 2026-03-28
+
+**Changes:**
+- Adapted SpargeAttn (block-sparse attention with INT8 quantization) for FLUX.2-klein
+  - Created `sparge/evaluate/modify_model/modify_flux2.py` with FLUX.2-specific processors (`SageAttnFlux2AttnProcessor`, `SageAttnFlux2SingleAttnProcessor`)
+  - Created `sparge/evaluate/flux2_inference.py` for single-GPU inference with tuning/manual hyperparams/sparsity logging
+- Created SpargeAttn batch evaluation pipeline: `run_evaluation_flux2_sparge.py` + `.sbatch` + `submit_flux2_sparge_eval.sh`
+  - Configurable sparsity hyperparameters (simthreshd1, cdfthreshd, pvthreshd) via CLI
+- Created unified speed benchmark (`benchmark/benchmark_speed.py`) with two modes:
+  - `--mode kernel`: Isolates attention kernels (SDPA vs HilbertA Triton vs SpargeAttn), uses real Q/K/V captured from pipeline
+  - `--mode e2e`: Full pipeline timing (baseline vs HilbertA reorder vs SpargeAttn)
+- Added GROUPS to Triton kernel autotuner key for correct per-tile-count tuning
+
+**Known Issues:**
+- HilbertA Triton kernel `reorder_shared` with 16 tiles crashes due to group_size=240 not being divisible by any valid BLOCK_M (64/128). Use `reorder` (no center) for 16t, or `masking` method.
+- SpargeAttn kernel is slower than SDPA at 1024x1024 due to block selection overhead (INT8 quantization + CDF block selection). Designed for longer sequences.
+
 ## v0.10 — Seam Attention, Mask Correction, and Benchmark Suite
 
 **Date:** 2026-03-28

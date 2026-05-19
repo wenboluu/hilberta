@@ -110,7 +110,7 @@ def keep(conf):
     return True
 
 
-@triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
+@triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM", "GROUPS"])
 @triton.jit
 # === Memory Layout (Strides) ===
 # qz=batch, qh=head, qm=sequence_length, qk=head_dim
