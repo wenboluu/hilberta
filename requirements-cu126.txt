@@ -1,0 +1,15 @@
+# Install torch/torchvision from the CUDA 12.6 index first (see README).
+# Constraints: use with `pip install -c requirements-cu126.txt -e '.[test,eval]'`.
+torch==2.9.0
+torchvision==0.24.0
+triton==3.5.0
+diffusers==0.36.0
+transformers==4.55.2
+peft==0.17.1
+accelerate==1.14.0
+safetensors==0.8.0
+huggingface-hub==0.36.2
+numpy==1.26.4
+Pillow==12.2.0
+torch-fidelity==0.4.0
+lpips==0.1.4

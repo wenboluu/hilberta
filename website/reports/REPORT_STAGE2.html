@@ -1,0 +1,4489 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>REPORT STAGE2 · HilbertA</title><link rel="stylesheet" href="../assets/style.css"><style>main{max-width:1400px;padding:40px 24px}h1{font-size:34px;letter-spacing:-1px;margin:30px 0}h2{font-size:26px;margin:40px 0 16px}h3{margin:24px 0 12px}p,ul{margin:16px 0}table{display:block;overflow:auto;max-width:100%;font-size:12px}pre{overflow:auto;padding:20px;background:#eef2e8}td,th{white-space:normal;min-width:100px}a{color:var(--accent)}</style><main><a href="../index.html">← HilbertA project page</a><p>Archived measured results · source commit f9ab0b2 · <a href="REPORT_STAGE2.md">Download Markdown</a></p><h1 id="flux-sparse-attention-stage-2-kernel-benchmarks-16-tile-training-clear-spargeattn-comparison-coco-1024-evaluation">FLUX sparse attention, stage 2: kernel benchmarks, 16-tile training, CLEAR / SpargeAttn comparison, COCO 1024 evaluation</h1>
+<p>Every number is <strong>measured</strong> in this run unless a cell says MISSING / untested / n/a. No plots (per instruction); image comparisons are kept as HTML pages. 
+Legend: <strong>our custom kernel</strong> = the HilbertA paired sparse kernel (<code>experiments/flux_kernel/paired_kernel.py</code>, 4-tile K1 and 16-tile K3); the evaluation images of ours4tile / ours16tile were generated with the Flex64 training backend. 
+<strong>Competitor official kernels</strong> = CLEAR (official repo + checkpoints) and SpargeAttn (official CUDA kernel, training-free API); they run in their own environments and are never modified. 
+Timing boundaries: <em>kernel</em> = resident attention kernel (QKV + metadata already on device); <em>attention</em> = kernel + real reorder/pack/unpack; <em>denoiser</em> = one transformer forward; <em>e2e</em> = 28-step generation at guidance 7.5 / true CFG 1 (text encoding from cache, VAE decode included unless the row says otherwise, PNG write excluded).</p>
+<h2 id="0-headline-read-this-first">0. Headline (read this first)</h2>
+<p><strong>Quality</strong> (2,048 COCO val prompts, 1024x1024, 28 steps, guidance 7.5, same initial latents; FID/KID vs real COCO, LPIPS/PSNR/SSIM paired vs Full FLUX):</p>
+<table>
+<thead>
+<tr>
+<th>method</th>
+<th style="text-align: right;">FID</th>
+<th style="text-align: right;">KID mean (std)</th>
+<th style="text-align: right;">LPIPS mean</th>
+<th style="text-align: right;">CLIP cos</th>
+<th style="text-align: right;">PSNR dB</th>
+<th style="text-align: right;">SSIM</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Full FLUX</td>
+<td style="text-align: right;">49.93</td>
+<td style="text-align: right;">0.0108 (0.0008)</td>
+<td style="text-align: right;">ref</td>
+<td style="text-align: right;">0.2612</td>
+<td style="text-align: right;">ref</td>
+<td style="text-align: right;">ref</td>
+</tr>
+<tr>
+<td>CLEAR local16</td>
+<td style="text-align: right;">49.99</td>
+<td style="text-align: right;">0.0101 (0.0009)</td>
+<td style="text-align: right;">0.477</td>
+<td style="text-align: right;">0.2608</td>
+<td style="text-align: right;">13.83</td>
+<td style="text-align: right;">0.604</td>
+</tr>
+<tr>
+<td>SpargeAttn topk0.25</td>
+<td style="text-align: right;">53.68</td>
+<td style="text-align: right;">0.0093 (0.0005)</td>
+<td style="text-align: right;">0.602</td>
+<td style="text-align: right;">0.2466</td>
+<td style="text-align: right;">12.35</td>
+<td style="text-align: right;">0.540</td>
+</tr>
+<tr>
+<td>ours 4-tile K1</td>
+<td style="text-align: right;">50.29</td>
+<td style="text-align: right;">0.0113 (0.0009)</td>
+<td style="text-align: right;">0.375</td>
+<td style="text-align: right;">0.2611</td>
+<td style="text-align: right;">15.63</td>
+<td style="text-align: right;">0.665</td>
+</tr>
+<tr>
+<td>ours 16-tile K3</td>
+<td style="text-align: right;">49.79</td>
+<td style="text-align: right;">0.0107 (0.0009)</td>
+<td style="text-align: right;">0.414</td>
+<td style="text-align: right;">0.2610</td>
+<td style="text-align: right;">15.09</td>
+<td style="text-align: right;">0.645</td>
+</tr>
+</tbody>
+</table>
+<p>KID std is the spread over 100 subsets, not a confidence interval. Real-vs-real half-split FID (finite-sample reference) is listed in section 3.</p>
+<p><strong>End-to-end generation</strong> (28 steps, pipeline call -&gt; latent, VAE decode excluded; seconds per image; speedup vs Full FLUX at the same resolution and batch):</p>
+<table>
+<thead>
+<tr>
+<th>method</th>
+<th style="text-align: right;">1024 b1</th>
+<th style="text-align: right;">1024 b8 (per image)</th>
+<th style="text-align: right;">2048 b1</th>
+<th style="text-align: right;">2048 b8 (per image)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Full FLUX (native flash SDPA)</td>
+<td style="text-align: right;">5.82</td>
+<td style="text-align: right;">5.56</td>
+<td style="text-align: right;">31.90</td>
+<td style="text-align: right;">31.69</td>
+</tr>
+<tr>
+<td>CLEAR local16 (official)</td>
+<td style="text-align: right;">5.52 (1.05x)</td>
+<td style="text-align: right;">5.32 (1.05x)</td>
+<td style="text-align: right;">21.60 (1.48x)</td>
+<td style="text-align: right;">21.85 (1.45x)</td>
+</tr>
+<tr>
+<td>SpargeAttn topk0.25 (official, training-free)</td>
+<td style="text-align: right;">5.40 (1.08x)</td>
+<td style="text-align: right;">5.02 (1.11x)</td>
+<td style="text-align: right;">20.11 (1.59x)</td>
+<td style="text-align: right;">20.53 (1.54x)</td>
+</tr>
+<tr>
+<td>ours 4-tile K1</td>
+<td style="text-align: right;">5.10 (1.14x)</td>
+<td style="text-align: right;">4.81 (1.16x)</td>
+<td style="text-align: right;">19.83 (1.61x)</td>
+<td style="text-align: right;">19.60 (1.62x)</td>
+</tr>
+<tr>
+<td>ours 16-tile K3</td>
+<td style="text-align: right;">4.96 (1.17x)</td>
+<td style="text-align: right;">4.70 (1.18x)</td>
+<td style="text-align: right;">17.65 (1.81x)</td>
+<td style="text-align: right;">17.40 (1.82x)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Denoiser forward</strong> (one transformer call, batch 1, ms) and <strong>attention kernel</strong> (57-layer phase-weighted per-layer latency, batch 1, ms):</p>
+<table>
+<thead>
+<tr>
+<th>method</th>
+<th style="text-align: right;">denoiser 1024</th>
+<th style="text-align: right;">denoiser 2048</th>
+<th style="text-align: right;">denoiser 4096</th>
+<th style="text-align: right;">kernel 512</th>
+<th style="text-align: right;">kernel 1024</th>
+<th style="text-align: right;">kernel 2048</th>
+<th style="text-align: right;">kernel 4096</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Full FLUX (native flash SDPA)</td>
+<td style="text-align: right;">208</td>
+<td style="text-align: right;">1150</td>
+<td style="text-align: right;">11128</td>
+<td style="text-align: right;">0.123</td>
+<td style="text-align: right;">0.814</td>
+<td style="text-align: right;">10.192</td>
+<td style="text-align: right;">153.467</td>
+</tr>
+<tr>
+<td>CLEAR local16 (official)</td>
+<td style="text-align: right;">198 (1.06x)</td>
+<td style="text-align: right;">773 (1.49x)</td>
+<td style="text-align: right;">OOM</td>
+<td style="text-align: right;">n/a (end-to-end only)</td>
+<td style="text-align: right;">n/a (end-to-end only)</td>
+<td style="text-align: right;">n/a (end-to-end only)</td>
+<td style="text-align: right;">n/a (end-to-end only)</td>
+</tr>
+<tr>
+<td>SpargeAttn topk0.25 (official, training-free)</td>
+<td style="text-align: right;">193 (1.08x)</td>
+<td style="text-align: right;">714 (1.61x)</td>
+<td style="text-align: right;">3592 (3.10x)</td>
+<td style="text-align: right;">n/a (end-to-end only)</td>
+<td style="text-align: right;">n/a (end-to-end only)</td>
+<td style="text-align: right;">n/a (end-to-end only)</td>
+<td style="text-align: right;">n/a (end-to-end only)</td>
+</tr>
+<tr>
+<td>ours 4-tile K1</td>
+<td style="text-align: right;">180 (1.16x)</td>
+<td style="text-align: right;">712 (1.61x)</td>
+<td style="text-align: right;">3938 (2.83x)</td>
+<td style="text-align: right;">0.081 (1.53x)</td>
+<td style="text-align: right;">0.318 (2.56x)</td>
+<td style="text-align: right;">2.463 (4.14x)</td>
+<td style="text-align: right;">30.380 (5.05x)</td>
+</tr>
+<tr>
+<td>ours 16-tile K3</td>
+<td style="text-align: right;">177 (1.18x)</td>
+<td style="text-align: right;">640 (1.80x)</td>
+<td style="text-align: right;">2757 (4.04x)</td>
+<td style="text-align: right;">UNSUPPORTED</td>
+<td style="text-align: right;">0.258 (3.16x)</td>
+<td style="text-align: right;">1.169 (8.72x)</td>
+<td style="text-align: right;">9.557 (16.06x)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>How to read these numbers</strong></p>
+<ul>
+<li>All speed rows come from one harness on single, exclusive H100 80GB GPUs (separate GPUs of one node ran different parts concurrently; a part refuses to start if another process is on its GPU). Competitors run their official code and weights in their own venvs inside the same harness: same prompts, initial latents, warm-up, 3 timed repeats, timing boundary and VRAM accounting; their setup (checkpoint load, processor install, block-mask build) is outside the timed region.</li>
+<li>Our LoRA is <strong>merged into the bf16 weights</strong> for timing (deployment form, zero extra cost). Merge gate: same-input rel-L2 merged vs unmerged = 0.005, 0.0053 (&lt; 0.02). Rows with the unmerged FP32 side-branch LoRA are kept as <code>*_lora_unmerged</code> (about 0.8x of Full at 1024) and are not used in the tables. At 2048/4096 no adapter was trained: speed only, quality not claimed (a merged LoRA has the same cost).</li>
+<li>The 2,048 evaluation images of ours were generated with the Flex64 <strong>training</strong> backend; the speed numbers use our <strong>custom paired inference kernel</strong>. Consistency gate with the 4-tile LoRA on 3 teacher-cache states: paired vs Flex64 rel-L2 0.0066, 0.0105, 0.0159 (tolerance 0.02); whole-denoiser paired vs dense-mask SDPA rel-L2 t4k1@1024=0.0095, t16k3@1024=0.0094, t4k1@2048=0.0086, t16k3@2048=0.0082, t4k1@4096=0.0069, t16k3@4096=0.0076.</li>
+<li>Why 1024 gains are small: at 4,608 tokens attention is about 22% of the denoiser (Full: 0.81 ms/layer x 57 = 46 ms of 208 ms), so even zero-cost attention caps the denoiser speedup near 1.28x. The share grows with tokens (about 50% at 2048, about 78% at 4096), which is where the 1.8x / 4.0x denoiser speedups of 16-tile K3 come from. Kernel latency x 57 layers predicts the measured denoiser time within 1% at 1024 and 2048 (within 7% at 4096).</li>
+<li>SpargeAttn is sparse <strong>and</strong> quantized (Q/K INT8, V FP8 inside its kernel); ours and CLEAR run BF16 attention. CLEAR is a full fine-tune of the attention projections (official checkpoint, training steps of the released checkpoint unknown).</li>
+<li>OOM / unsupported, reported verbatim: CLEAR at 4096 (official create_block_mask requests 195 GiB); every method's denoiser at 4096 batch 8 (MLP activations; batch 4 already peaks at 48 GiB); 16-tile at 512 (build_plan needs &gt;= 256 tokens per tile). CLEAR 2048 denoiser rows were re-measured in a fresh process after an allocator-state OOM; the superseded rows are kept with a note.</li>
+<li>Competitor configuration screening (section 5) used the competitors' own scripts on 32 development prompts (VAE decode included); the choice rule is lowest latency only. In the unified harness above, both chosen competitors are faster than Full at every point where they ran.</li>
+</ul>
+<h2 id="1-environment-and-commits">1. Environment and commits</h2>
+<ul>
+<li>Stage-1 source commit (4-tile run, <code>source_commit.txt</code>): <code>9c35fcc24edf5ff27b10dc43f20d33e7fa76ab48</code></li>
+<li>Stage-2 source commit (<code>source_commit_stage2.txt</code>): <code>e9ac4b4f873befc70bf0330c4d77a62e286faa34</code></li>
+<li><code>training/config.json</code> software: python 3.11.2, packages {"torch": "2.9.1", "diffusers": "0.36.0", "transformers": "4.55.2", "peft": "0.17.1", "accelerate": "1.14.0", "triton": "3.5.1", "numpy": "1.26.4", "Pillow": "12.3.0", "safetensors": "0.8.0", "torch-fidelity": "0.4.0", "lpips": "0.1.4", "scipy": "1.17.1"}, CUDA 12.9, cudnn 91100, GPUs 8 x NVIDIA H100 80GB HBM3, host dccd-pcde4-1004-0-d629-bf19-7f51</li>
+<li><code>training_16tile_k3/config.json</code> software: python 3.11.2, packages {"torch": "2.9.1", "diffusers": "0.36.0", "transformers": "4.55.2", "peft": "0.17.1", "accelerate": "1.14.0", "triton": "3.5.1", "numpy": "1.26.4", "Pillow": "12.3.0", "safetensors": "0.8.0", "torch-fidelity": "0.4.0", "lpips": "0.1.4", "scipy": "1.17.1"}, CUDA 12.9, cudnn 91100, GPUs 8 x NVIDIA H100 80GB HBM3, host n124-105-214</li>
+<li>Metrics environment: {"python": "3.11.2", "torch": "2.9.1", "torch_fidelity": "0.4.0", "lpips": "0.1.4", "transformers": "4.55.2", "numpy": "1.26.4", "Pillow": "12.3.0", "scipy": "1.17.1", "scikit_image": null}</li>
+<li>Generation protocol <code>full_flux</code>: backend native_sdpa_flash (full attention, no LoRA); steps 28; guidance 7.5; true_cfg 1.0; batch 1; adapter - (- updates); manifest sha <code>5a2d7bf1f5151a4bc805a1b8000e5041510f29e8ebeab3428fce2994c6222fcc</code></li>
+<li>Generation protocol <code>ours</code>: backend FlexAttention64 packed QKV (per-layer pack/unpack); steps 28; guidance 7.5; true_cfg 1.0; batch 1; adapter fb4bc94aa94f7dfe267db6f6ebedd0895b31e7d18687e551483fde5cbae8f6d8 (1792 updates); manifest sha <code>5a2d7bf1f5151a4bc805a1b8000e5041510f29e8ebeab3428fce2994c6222fcc</code></li>
+<li>Generation protocol <code>ours16tile</code>: backend FlexAttention64 packed QKV (per-layer pack/unpack); steps 28; guidance 7.5; true_cfg 1.0; batch 1; adapter 85491a8548a9533c5bf87ca1d7e6440741b5be36cb77d0ce97eb86ed467abc10 (1792 updates); manifest sha <code>5a2d7bf1f5151a4bc805a1b8000e5041510f29e8ebeab3428fce2994c6222fcc</code></li>
+<li>Generation protocol <code>clear_local16</code>: backend torch FlexAttention (official processors, torch.compile), shared global block mask; steps 28; guidance 7.5; true_cfg 1.0; batch 1; adapter - (- updates); manifest sha <code>5a2d7bf1f5151a4bc805a1b8000e5041510f29e8ebeab3428fce2994c6222fcc</code></li>
+<li>Generation protocol <code>sparge_topk0.25</code>: backend spas_sage2_attn_meansim_topk_cuda; steps 28; guidance 7.5; true_cfg 1.0; batch 1; adapter - (- updates); manifest sha <code>5a2d7bf1f5151a4bc805a1b8000e5041510f29e8ebeab3428fce2994c6222fcc</code></li>
+</ul>
+<h2 id="2-training-actual-batch-updates-checkpoints">2. Training (actual batch / updates / checkpoints)</h2>
+<h3 id="run-a-4-tile-k1-stage-1-reused-training">Run A: 4-tile K1 (stage 1, reused) (<code>training/</code>)</h3>
+<ul>
+<li>Topology: tiles 4, bridge block64_k1_reciprocal (K=1), shared 0, grid 64, text tokens 512; backend FlexAttention64 packed QKV (flex options ada)</li>
+<li>LoRA r32 alpha 32 dropout 0.0, trainable params 74711040; init: original FLUX plus zero LoRA; no old LoRA loaded</li>
+<li><strong>Actual batch:</strong> microbatch 8 x 8 ranks x accum 1 = global batch 64; <strong>planned updates 1792</strong> over 114688 records (1 epoch), shuffle seed 2707</li>
+<li>Optimizer adamw betas(.9,.999) eps1e-8 wd1e-4; lr 5e-05, warmup 100, constant after warmup; grad clip 1.0; precision BF16 base, FP32 LoRA</li>
+<li>Hashes: image_mask <code>04864d8e08df1c8fc11e19de7349f2fb6bff1a82f257bbdda81ca32e8614ec9c</code>, lora_targets <code>0017a3b06fae39759257930d6c2da2cf872ee39d5d5edfae8586145120f1c1f7</code>, manifest <code>509b174550d284ba0122e84566e0674e4de379e896ef835e50004fcaae48af13</code></li>
+<li>complete.json: {"complete": true, "completed_updates": 1792, "processed_records": 114688, "records": 114688}</li>
+<li>metrics.jsonl: <strong>1792 updates done</strong>, 114688 records, epoch fraction 1.0000; wall 3.32 h; median update 6.65 s; peak allocated 44.7 GiB; final train MSE 0.029450</li>
+<li><strong>Final checkpoint:</strong> <code>training/checkpoints/adapter_step001792.pt</code></li>
+</ul>
+<h3 id="run-b-16-tile-k3-stage-2-training_16tile_k3">Run B: 16-tile K3 (stage 2) (<code>training_16tile_k3/</code>)</h3>
+<ul>
+<li>Topology: tiles 16, bridge block64_k3_reciprocal (K=3), shared 0, grid 64, text tokens 512; backend FlexAttention64 packed QKV (flex options ada)</li>
+<li>LoRA r32 alpha 32 dropout 0.0, trainable params 74711040; init: original FLUX plus zero LoRA; no old LoRA loaded</li>
+<li><strong>Actual batch:</strong> microbatch 8 x 8 ranks x accum 1 = global batch 64; <strong>planned updates 1792</strong> over 114688 records (1 epoch), shuffle seed 2707</li>
+<li>Optimizer adamw betas(.9,.999) eps1e-8 wd1e-4; lr 5e-05, warmup 100, constant after warmup; grad clip 1.0; precision BF16 base, FP32 LoRA</li>
+<li>Hashes: image_mask <code>cfc5088810be964580a74744f94ccb54baa8d0745b53eb9e3b263bf9d6e6323f</code>, lora_targets <code>0017a3b06fae39759257930d6c2da2cf872ee39d5d5edfae8586145120f1c1f7</code>, manifest <code>509b174550d284ba0122e84566e0674e4de379e896ef835e50004fcaae48af13</code></li>
+<li>complete.json: {"complete": true, "completed_updates": 1792, "processed_records": 114688, "records": 114688}</li>
+<li>metrics.jsonl: <strong>1792 updates done</strong>, 114688 records, epoch fraction 1.0000; wall 3.19 h; median update 6.39 s; peak allocated 44.7 GiB; final train MSE 0.047847</li>
+<li><strong>Final checkpoint:</strong> <code>training_16tile_k3/checkpoints/adapter_step001792.pt</code></li>
+</ul>
+<p>Both runs: fresh LoRA from the original FLUX.1-dev (no 4-tile adapter loaded for run B), same teacher cache (2,048 prompts x 2 seeds x 28 steps = 114,688 records), same global batch / optimizer. The final checkpoint is the end-of-epoch adapter; no checkpoint was chosen by evaluation.</p>
+<h2 id="3-quality-2048-coco-val-prompts-1024-x-1024-seed-2707-matched-initial-latents">3. Quality (2,048 COCO val prompts, 1024 x 1024, seed 2707, matched initial latents)</h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>What it is</th>
+<th style="text-align: right;">FID (aux.)</th>
+<th style="text-align: right;">KID mean +- std</th>
+<th style="text-align: right;">LPIPS mean / median / p90</th>
+<th style="text-align: right;">CLIP cos</th>
+<th style="text-align: right;">PSNR mean / median (dB)</th>
+<th style="text-align: right;">PSNR inf</th>
+<th style="text-align: right;">SSIM mean / median</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Full FLUX</td>
+<td>native flash SDPA full attention, no LoRA (baseline; official PyTorch/diffusers kernel)</td>
+<td style="text-align: right;">49.933</td>
+<td style="text-align: right;">0.010783 +- 0.000822</td>
+<td style="text-align: right;">reference</td>
+<td style="text-align: right;">0.2612</td>
+<td style="text-align: right;">reference</td>
+<td style="text-align: right;">reference</td>
+<td style="text-align: right;">reference</td>
+</tr>
+<tr>
+<td>ours4tile</td>
+<td>4-tile K1 reciprocal, no shared, Flex64, LoRA r32 (our method; <strong>our custom kernel</strong> in kernel_bench, Flex64 for the evaluation images)</td>
+<td style="text-align: right;">50.285</td>
+<td style="text-align: right;">0.011262 +- 0.000883</td>
+<td style="text-align: right;">0.3755 / 0.3739 / 0.5327</td>
+<td style="text-align: right;">0.2611</td>
+<td style="text-align: right;">15.63 / 15.33</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0.6652 / 0.6701</td>
+</tr>
+<tr>
+<td>ours16tile</td>
+<td>16-tile K3 reciprocal, no shared, Flex64, LoRA r32 (our method; <strong>our custom kernel</strong> in kernel_bench, Flex64 for the evaluation images)</td>
+<td style="text-align: right;">49.789</td>
+<td style="text-align: right;">0.010658 +- 0.000894</td>
+<td style="text-align: right;">0.4136 / 0.4184 / 0.5573</td>
+<td style="text-align: right;">0.2610</td>
+<td style="text-align: right;">15.09 / 14.80</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0.6452 / 0.6454</td>
+</tr>
+<tr>
+<td>clear_local16</td>
+<td>CLEAR official code + official checkpoint, config local16  (<strong>competitor official kernel/path</strong>)</td>
+<td style="text-align: right;">49.993</td>
+<td style="text-align: right;">0.010100 +- 0.000877</td>
+<td style="text-align: right;">0.4765 / 0.4820 / 0.6010</td>
+<td style="text-align: right;">0.2608</td>
+<td style="text-align: right;">13.83 / 13.66</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0.6037 / 0.6083</td>
+</tr>
+<tr>
+<td>sparge_topk0.25</td>
+<td>SpargeAttn training-free spas_sage2_attn_meansim_topk_cuda, config topk0.25  (<strong>competitor official kernel</strong>)</td>
+<td style="text-align: right;">53.683</td>
+<td style="text-align: right;">0.009262 +- 0.000484</td>
+<td style="text-align: right;">0.6019 / 0.6139 / 0.7287</td>
+<td style="text-align: right;">0.2466</td>
+<td style="text-align: right;">12.35 / 12.12</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0.5402 / 0.5391</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>FID/KID vs real COCO (2048 images each): torch-fidelity 0.4.0, torch-fidelity inception-v3-compat 2048 pool, weights sha <code>6726825d0af5f729cebd5821db510b11b1cfad8faad88a03f1befd49fb9129b2</code>; KID 100 subsets x 1000, seed 2707, raw KID (no x1000); <strong>KID std is the spread over subsets, not a confidence interval</strong>. KID is primary; FID at n=2,048 is finite-sample biased (auxiliary). Real half-vs-half FID 58.171 (n=1024).</li>
+<li>Stage-1 Inception features were reused only after verifying every PNG's sha256 against the generation manifests (<code>metrics.py features_valid</code>); new sets were computed with the same extractor.</li>
+<li>LPIPS: {"metric": "LPIPS-Alex at512", "resize": "bilinear antialias 1024-&gt;512 on [-1,1] float", "implementation": {"package": "lpips", "version": "0.1.4", "net": "alex", "lpips_version": "0.1", "torch": "2.9.1"}}; paired with Full FLUX (same prompt + initial latent); lower = closer to the teacher, not a quality claim.</li>
+<li>CLIP cosine: {"metric": "CLIP cosine", "model": "openai/clip-vit-large-patch14", "revision": "32bd64288804d66eefd0ccbe215aa642df71cc41", "transformers": "4.55.2", "note": "L2-normalised image/text embeddings, mean cosine, no scaling (not CLIPScore x100 / x2.5)"}; COCO real photos score 0.2568 (n=2048).</li>
+<li>PSNR/SSIM vs Full FLUX on the 1024 originals: PNG -&gt; uint8 RGB -&gt; float32 / 255 in [0,1]; no resize; PSNR data_range 1.0, infinite values (bit-identical images) counted in the <code>PSNR inf</code> column and excluded from mean/median; SSIM Gaussian window 11, sigma 1.5, K1 0.01, K2 0.03, per RGB channel, averaged, population (use_sample_covariance=False), (window-1)/2 = 5 px cropped before the mean (as scikit-image); implementation {"code": "experiments/coco1024/metrics.py ssim()/psnr() (torch)", "torch": "2.9.1", "numpy": "1.26.4", "Pillow": "12.3.0", "device": "cuda:0", "crosscheck": "scikit-image not installed in this environment; only our torch implementation was used"}. Both measure teacher fidelity, not perceptual quality.</li>
+<li>
+<p>Per-image values: <code>evaluation/metrics_stage2/per_image_metrics.jsonl</code> (one row per method x prompt). Missing metric blocks: none.</p>
+</li>
+<li>
+<p>64-sample comparison page: <code>evaluation/comparisons/index_stage2.html</code> (present), subset frozen in stage 1 (<code>comparisons/subset.json</code>).</p>
+</li>
+</ul>
+<h2 id="4-latency-throughput-vram-kernel_benchsummaryjson-raw-per-measurement-jsoncsv-in-kernel_bench">4. Latency / throughput / VRAM (<code>kernel_bench/summary.json</code>, raw per-measurement JSON/CSV in <code>kernel_bench/</code>)</h2>
+<p>One H100 80GB, same clocks and software stack for every row; CUDA-event / synchronised wall time; median with p10/p90; warm-up and compilation excluded and listed separately in the raw files. 
+<code>speedup_vs_full</code> is relative to the native flash SDPA full-attention baseline <strong>at the same stage, resolution and batch</strong> (a kernel speedup is never reported as an end-to-end speedup). 
+Rows with topology 16-tile K3 at resolutions other than 1024, or any row at 2048/4096, are <strong>speed-only: no adapter trained at that setting, quality not claimed</strong>. Status oom / unsupported / untested is reported verbatim.</p>
+<h4 id="stage-kernel-106-rows">stage = <code>kernel</code> (106 rows)</h4>
+<table>
+<thead>
+<tr>
+<th>stage</th>
+<th>backend</th>
+<th>topology</th>
+<th>resolution</th>
+<th>batch</th>
+<th>median_ms</th>
+<th>p10_ms</th>
+<th>p90_ms</th>
+<th>speedup_vs_full</th>
+<th>peak_alloc_gib</th>
+<th>peak_reserved_gib</th>
+<th>status</th>
+<th>extra</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>512</td>
+<td>1</td>
+<td>0.123</td>
+<td>0.123</td>
+<td>0.124</td>
+<td></td>
+<td></td>
+<td>0.096</td>
+<td>ok</td>
+<td>image_tokens=1024, total_tokens=1536, tiles=None, tile_size=None, bridge_k=None, kernel_options=None, phase=weighted, peak_allocated_gib=0.067, rounds=3, note=phase independent; median over rounds, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>1</td>
+<td>0.814</td>
+<td>0.789</td>
+<td>0.838</td>
+<td></td>
+<td></td>
+<td>0.186</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, kernel_options=None, phase=weighted, peak_allocated_gib=0.11, rounds=3, note=phase independent; median over rounds, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>2</td>
+<td>1.573</td>
+<td>1.540</td>
+<td>1.643</td>
+<td></td>
+<td></td>
+<td>0.289</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, kernel_options=None, phase=weighted, peak_allocated_gib=0.212, rounds=3, note=phase independent; median over rounds, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>4</td>
+<td>3.087</td>
+<td>3.059</td>
+<td>3.225</td>
+<td></td>
+<td></td>
+<td>0.564</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, kernel_options=None, phase=weighted, peak_allocated_gib=0.424, rounds=3, note=phase independent; median over rounds, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>8</td>
+<td>6.308</td>
+<td>6.032</td>
+<td>6.422</td>
+<td></td>
+<td></td>
+<td>1.104</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, kernel_options=None, phase=weighted, peak_allocated_gib=0.847, rounds=3, note=phase independent; median over rounds, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>1</td>
+<td>10.192</td>
+<td>9.926</td>
+<td>10.466</td>
+<td></td>
+<td></td>
+<td>0.557</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, kernel_options=None, phase=weighted, peak_allocated_gib=0.393, rounds=3, note=phase independent; median over rounds, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>2</td>
+<td>20.979</td>
+<td>20.668</td>
+<td>21.723</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, kernel_options=None, phase=weighted, peak_allocated_gib=0.777, rounds=3, note=phase independent; median over rounds, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>4</td>
+<td>41.819</td>
+<td>40.619</td>
+<td>43.042</td>
+<td></td>
+<td></td>
+<td>1.971</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, kernel_options=None, phase=weighted, peak_allocated_gib=1.553, rounds=3, note=phase independent; median over rounds, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>8</td>
+<td>80.617</td>
+<td>80.291</td>
+<td>82.020</td>
+<td></td>
+<td></td>
+<td>3.910</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, kernel_options=None, phase=weighted, peak_allocated_gib=3.106, rounds=3, note=phase independent; median over rounds, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>4096</td>
+<td>1</td>
+<td>153.467</td>
+<td>152.159</td>
+<td>154.279</td>
+<td></td>
+<td></td>
+<td>2.000</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, kernel_options=None, phase=weighted, peak_allocated_gib=1.558, rounds=3, note=phase independent; median over rounds, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>512</td>
+<td>1</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td>unsupported</td>
+<td>image_tokens=1024, total_tokens=1536, tiles=16, tile_size=64, bridge_k=3, kernel_options=None, phase=weighted, note=unsupported by build_plan: image_tokens/tiles=64 is not a multiple of 256 (not hacked around)</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>1</td>
+<td>0.248</td>
+<td>0.244</td>
+<td>0.252</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=0, peak_allocated_gib=0.136, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>1</td>
+<td>0.260</td>
+<td>0.257</td>
+<td>0.279</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=1, peak_allocated_gib=0.136, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>1</td>
+<td>0.261</td>
+<td>0.248</td>
+<td>0.280</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=2, peak_allocated_gib=0.136, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>1</td>
+<td>0.263</td>
+<td>0.255</td>
+<td>0.267</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=3, peak_allocated_gib=0.136, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>1</td>
+<td>0.258</td>
+<td>0.251</td>
+<td>0.265</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, rounds=3, peak_allocated_gib=0.136, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=3.156980558646344</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>2</td>
+<td>0.469</td>
+<td>0.465</td>
+<td>0.501</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=0, peak_allocated_gib=0.217, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>2</td>
+<td>0.489</td>
+<td>0.485</td>
+<td>0.500</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=1, peak_allocated_gib=0.217, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>2</td>
+<td>0.478</td>
+<td>0.474</td>
+<td>0.479</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=2, peak_allocated_gib=0.217, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>2</td>
+<td>0.492</td>
+<td>0.484</td>
+<td>0.507</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=3, peak_allocated_gib=0.217, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>2</td>
+<td>0.482</td>
+<td>0.478</td>
+<td>0.496</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, rounds=3, peak_allocated_gib=0.217, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=3.2657554160539624</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>4</td>
+<td>0.878</td>
+<td>0.863</td>
+<td>0.893</td>
+<td></td>
+<td></td>
+<td>0.557</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=0, peak_allocated_gib=0.434, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>4</td>
+<td>0.901</td>
+<td>0.899</td>
+<td>0.949</td>
+<td></td>
+<td></td>
+<td>0.557</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=1, peak_allocated_gib=0.434, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>4</td>
+<td>0.895</td>
+<td>0.875</td>
+<td>0.914</td>
+<td></td>
+<td></td>
+<td>0.564</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=2, peak_allocated_gib=0.434, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>4</td>
+<td>0.913</td>
+<td>0.899</td>
+<td>0.942</td>
+<td></td>
+<td></td>
+<td>0.557</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=3, peak_allocated_gib=0.434, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>4</td>
+<td>0.893</td>
+<td>0.884</td>
+<td>0.919</td>
+<td></td>
+<td></td>
+<td>0.564</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, rounds=3, peak_allocated_gib=0.434, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=3.4566855875185176</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>8</td>
+<td>1.726</td>
+<td>1.688</td>
+<td>1.768</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=0, peak_allocated_gib=0.868, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>8</td>
+<td>1.798</td>
+<td>1.770</td>
+<td>1.817</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=1, peak_allocated_gib=0.868, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>8</td>
+<td>1.747</td>
+<td>1.721</td>
+<td>1.791</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=2, peak_allocated_gib=0.868, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>8</td>
+<td>1.785</td>
+<td>1.769</td>
+<td>1.830</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=3, peak_allocated_gib=0.868, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>8</td>
+<td>1.760</td>
+<td>1.739</td>
+<td>1.793</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, rounds=3, peak_allocated_gib=0.868, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=3.5838805559638964</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>1</td>
+<td>1.168</td>
+<td>1.149</td>
+<td>1.184</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=0, peak_allocated_gib=0.418, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>1</td>
+<td>1.161</td>
+<td>1.159</td>
+<td>1.209</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=1, peak_allocated_gib=0.418, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>1</td>
+<td>1.173</td>
+<td>1.154</td>
+<td>1.192</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=2, peak_allocated_gib=0.418, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>1</td>
+<td>1.161</td>
+<td>1.159</td>
+<td>1.219</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=3, peak_allocated_gib=0.418, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>1</td>
+<td>1.169</td>
+<td>1.155</td>
+<td>1.197</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, rounds=3, peak_allocated_gib=0.418, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=8.715479450526665</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>2</td>
+<td>2.392</td>
+<td>2.339</td>
+<td>2.478</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=0, peak_allocated_gib=0.78, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>2</td>
+<td>2.429</td>
+<td>2.338</td>
+<td>2.472</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=1, peak_allocated_gib=0.78, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>2</td>
+<td>2.422</td>
+<td>2.328</td>
+<td>2.461</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=2, peak_allocated_gib=0.78, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>2</td>
+<td>2.429</td>
+<td>2.320</td>
+<td>2.455</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=3, peak_allocated_gib=0.78, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>2</td>
+<td>2.419</td>
+<td>2.335</td>
+<td>2.459</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, rounds=3, peak_allocated_gib=0.78, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=8.673285341966613</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>4</td>
+<td>4.482</td>
+<td>4.407</td>
+<td>4.655</td>
+<td></td>
+<td></td>
+<td>1.963</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=0, peak_allocated_gib=1.559, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>4</td>
+<td>4.525</td>
+<td>4.449</td>
+<td>4.670</td>
+<td></td>
+<td></td>
+<td>1.963</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=1, peak_allocated_gib=1.559, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>4</td>
+<td>4.502</td>
+<td>4.424</td>
+<td>4.583</td>
+<td></td>
+<td></td>
+<td>1.971</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=2, peak_allocated_gib=1.559, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>4</td>
+<td>4.547</td>
+<td>4.447</td>
+<td>4.641</td>
+<td></td>
+<td></td>
+<td>1.963</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=3, peak_allocated_gib=1.559, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>4</td>
+<td>4.514</td>
+<td>4.434</td>
+<td>4.626</td>
+<td></td>
+<td></td>
+<td>1.971</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, rounds=3, peak_allocated_gib=1.559, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=9.265216914730605</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>8</td>
+<td>8.733</td>
+<td>8.658</td>
+<td>8.882</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=0, peak_allocated_gib=3.118, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>8</td>
+<td>8.817</td>
+<td>8.795</td>
+<td>8.898</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=1, peak_allocated_gib=3.118, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>8</td>
+<td>8.777</td>
+<td>8.697</td>
+<td>8.919</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=2, peak_allocated_gib=3.118, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>8</td>
+<td>8.815</td>
+<td>8.744</td>
+<td>8.989</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=3, peak_allocated_gib=3.118, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>8</td>
+<td>8.784</td>
+<td>8.749</td>
+<td>8.883</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, rounds=3, peak_allocated_gib=3.118, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=9.177221841605915</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>4096</td>
+<td>1</td>
+<td>9.546</td>
+<td>9.466</td>
+<td>9.715</td>
+<td></td>
+<td></td>
+<td>2.023</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=16, tile_size=4096, bridge_k=3, phase=0, peak_allocated_gib=1.579, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>4096</td>
+<td>1</td>
+<td>9.611</td>
+<td>9.488</td>
+<td>9.720</td>
+<td></td>
+<td></td>
+<td>2.023</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=16, tile_size=4096, bridge_k=3, phase=1, peak_allocated_gib=1.579, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>4096</td>
+<td>1</td>
+<td>9.551</td>
+<td>9.467</td>
+<td>9.794</td>
+<td></td>
+<td></td>
+<td>2.023</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=16, tile_size=4096, bridge_k=3, phase=2, peak_allocated_gib=1.579, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>4096</td>
+<td>1</td>
+<td>9.575</td>
+<td>9.413</td>
+<td>9.852</td>
+<td></td>
+<td></td>
+<td>2.023</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=16, tile_size=4096, bridge_k=3, phase=3, peak_allocated_gib=1.579, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>4096</td>
+<td>1</td>
+<td>9.557</td>
+<td>9.460</td>
+<td>9.752</td>
+<td></td>
+<td></td>
+<td>2.023</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=16, tile_size=4096, bridge_k=3, phase=weighted, rounds=3, peak_allocated_gib=1.579, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=16.057231013059518</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>512</td>
+<td>1</td>
+<td>0.079</td>
+<td>0.078</td>
+<td>0.079</td>
+<td></td>
+<td></td>
+<td>0.096</td>
+<td>ok</td>
+<td>image_tokens=1024, total_tokens=1536, tiles=4, tile_size=256, bridge_k=1, phase=0, peak_allocated_gib=0.066, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>512</td>
+<td>1</td>
+<td>0.081</td>
+<td>0.079</td>
+<td>0.082</td>
+<td></td>
+<td></td>
+<td>0.094</td>
+<td>ok</td>
+<td>image_tokens=1024, total_tokens=1536, tiles=4, tile_size=256, bridge_k=1, phase=1, peak_allocated_gib=0.066, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>512</td>
+<td>1</td>
+<td>0.081</td>
+<td>0.081</td>
+<td>0.083</td>
+<td></td>
+<td></td>
+<td>0.096</td>
+<td>ok</td>
+<td>image_tokens=1024, total_tokens=1536, tiles=4, tile_size=256, bridge_k=1, phase=2, peak_allocated_gib=0.066, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>512</td>
+<td>1</td>
+<td>0.082</td>
+<td>0.081</td>
+<td>0.084</td>
+<td></td>
+<td></td>
+<td>0.094</td>
+<td>ok</td>
+<td>image_tokens=1024, total_tokens=1536, tiles=4, tile_size=256, bridge_k=1, phase=3, peak_allocated_gib=0.066, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>512</td>
+<td>1</td>
+<td>0.081</td>
+<td>0.080</td>
+<td>0.082</td>
+<td></td>
+<td></td>
+<td>0.096</td>
+<td>ok</td>
+<td>image_tokens=1024, total_tokens=1536, tiles=4, tile_size=256, bridge_k=1, phase=weighted, rounds=3, peak_allocated_gib=0.066, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=1.526937282680236</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>1</td>
+<td>0.315</td>
+<td>0.310</td>
+<td>0.316</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=0, peak_allocated_gib=0.136, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>1</td>
+<td>0.321</td>
+<td>0.314</td>
+<td>0.327</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=1, peak_allocated_gib=0.136, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>1</td>
+<td>0.316</td>
+<td>0.311</td>
+<td>0.328</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=2, peak_allocated_gib=0.136, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>1</td>
+<td>0.321</td>
+<td>0.313</td>
+<td>0.336</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=3, peak_allocated_gib=0.136, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>1</td>
+<td>0.318</td>
+<td>0.313</td>
+<td>0.324</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, rounds=3, peak_allocated_gib=0.136, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=2.557587475137035</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>2</td>
+<td>0.612</td>
+<td>0.599</td>
+<td>0.644</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=0, peak_allocated_gib=0.217, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>2</td>
+<td>0.622</td>
+<td>0.607</td>
+<td>0.662</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=1, peak_allocated_gib=0.217, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>2</td>
+<td>0.609</td>
+<td>0.599</td>
+<td>0.636</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=2, peak_allocated_gib=0.217, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>2</td>
+<td>0.613</td>
+<td>0.604</td>
+<td>0.641</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=3, peak_allocated_gib=0.217, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>2</td>
+<td>0.613</td>
+<td>0.603</td>
+<td>0.640</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, rounds=3, peak_allocated_gib=0.217, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=2.566502929610197</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>4</td>
+<td>1.152</td>
+<td>1.133</td>
+<td>1.196</td>
+<td></td>
+<td></td>
+<td>0.557</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=0, peak_allocated_gib=0.434, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>4</td>
+<td>1.163</td>
+<td>1.150</td>
+<td>1.211</td>
+<td></td>
+<td></td>
+<td>0.557</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=1, peak_allocated_gib=0.434, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>4</td>
+<td>1.154</td>
+<td>1.146</td>
+<td>1.211</td>
+<td></td>
+<td></td>
+<td>0.564</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=2, peak_allocated_gib=0.434, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>4</td>
+<td>1.162</td>
+<td>1.151</td>
+<td>1.227</td>
+<td></td>
+<td></td>
+<td>0.564</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=3, peak_allocated_gib=0.434, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>4</td>
+<td>1.161</td>
+<td>1.144</td>
+<td>1.204</td>
+<td></td>
+<td></td>
+<td>0.564</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, rounds=3, peak_allocated_gib=0.434, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=2.6589742188630154</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>8</td>
+<td>2.283</td>
+<td>2.247</td>
+<td>2.344</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=0, peak_allocated_gib=0.868, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>8</td>
+<td>2.300</td>
+<td>2.263</td>
+<td>2.387</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=1, peak_allocated_gib=0.868, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>8</td>
+<td>2.267</td>
+<td>2.248</td>
+<td>2.394</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=2, peak_allocated_gib=0.868, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>8</td>
+<td>2.302</td>
+<td>2.268</td>
+<td>2.342</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=3, peak_allocated_gib=0.868, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>8</td>
+<td>2.287</td>
+<td>2.257</td>
+<td>2.350</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, rounds=3, peak_allocated_gib=0.868, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=2.7583158638799077</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>1</td>
+<td>2.453</td>
+<td>2.395</td>
+<td>2.508</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=0, peak_allocated_gib=0.418, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>1</td>
+<td>2.464</td>
+<td>2.408</td>
+<td>2.505</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=1, peak_allocated_gib=0.418, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>1</td>
+<td>2.467</td>
+<td>2.409</td>
+<td>2.527</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=2, peak_allocated_gib=0.418, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>1</td>
+<td>2.473</td>
+<td>2.413</td>
+<td>2.512</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=3, peak_allocated_gib=0.418, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>1</td>
+<td>2.463</td>
+<td>2.415</td>
+<td>2.507</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, rounds=3, peak_allocated_gib=0.418, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=4.138066459672492</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>2</td>
+<td>5.073</td>
+<td>4.958</td>
+<td>5.288</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=0, peak_allocated_gib=0.78, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>2</td>
+<td>5.096</td>
+<td>5.052</td>
+<td>5.104</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=1, peak_allocated_gib=0.78, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>2</td>
+<td>5.093</td>
+<td>4.913</td>
+<td>5.243</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=2, peak_allocated_gib=0.78, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>2</td>
+<td>5.095</td>
+<td>5.028</td>
+<td>5.193</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=3, peak_allocated_gib=0.78, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>2</td>
+<td>5.090</td>
+<td>5.032</td>
+<td>5.175</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, rounds=3, peak_allocated_gib=0.78, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=4.121869753003244</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>4</td>
+<td>9.804</td>
+<td>9.687</td>
+<td>10.183</td>
+<td></td>
+<td></td>
+<td>1.963</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=0, peak_allocated_gib=1.559, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>4</td>
+<td>9.773</td>
+<td>9.516</td>
+<td>10.148</td>
+<td></td>
+<td></td>
+<td>1.963</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=1, peak_allocated_gib=1.559, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>4</td>
+<td>9.753</td>
+<td>9.678</td>
+<td>10.082</td>
+<td></td>
+<td></td>
+<td>1.971</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=2, peak_allocated_gib=1.559, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>4</td>
+<td>9.785</td>
+<td>9.701</td>
+<td>10.041</td>
+<td></td>
+<td></td>
+<td>1.971</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=3, peak_allocated_gib=1.559, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>4</td>
+<td>9.795</td>
+<td>9.646</td>
+<td>10.115</td>
+<td></td>
+<td></td>
+<td>1.971</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, rounds=3, peak_allocated_gib=1.559, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=4.269532539492324</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>8</td>
+<td>18.957</td>
+<td>18.835</td>
+<td>19.058</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=0, peak_allocated_gib=3.118, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>8</td>
+<td>18.972</td>
+<td>18.888</td>
+<td>19.055</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=1, peak_allocated_gib=3.118, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>8</td>
+<td>18.921</td>
+<td>18.767</td>
+<td>18.993</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=2, peak_allocated_gib=3.118, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>8</td>
+<td>18.980</td>
+<td>18.874</td>
+<td>19.046</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=3, peak_allocated_gib=3.118, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>8</td>
+<td>18.958</td>
+<td>18.849</td>
+<td>19.031</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, rounds=3, peak_allocated_gib=3.118, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=4.252504758652586</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>4096</td>
+<td>1</td>
+<td>30.376</td>
+<td>29.692</td>
+<td>30.972</td>
+<td></td>
+<td></td>
+<td>1.980</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=4, tile_size=16384, bridge_k=1, phase=0, peak_allocated_gib=1.552, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>4096</td>
+<td>1</td>
+<td>30.230</td>
+<td>29.746</td>
+<td>30.922</td>
+<td></td>
+<td></td>
+<td>1.980</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=4, tile_size=16384, bridge_k=1, phase=1, peak_allocated_gib=1.552, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>4096</td>
+<td>1</td>
+<td>30.526</td>
+<td>29.867</td>
+<td>31.001</td>
+<td></td>
+<td></td>
+<td>1.957</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=4, tile_size=16384, bridge_k=1, phase=2, peak_allocated_gib=1.552, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>4096</td>
+<td>1</td>
+<td>30.422</td>
+<td>29.676</td>
+<td>30.970</td>
+<td></td>
+<td></td>
+<td>1.980</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=4, tile_size=16384, bridge_k=1, phase=3, peak_allocated_gib=1.552, rounds=3</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>4096</td>
+<td>1</td>
+<td>30.380</td>
+<td>29.794</td>
+<td>30.939</td>
+<td></td>
+<td></td>
+<td>1.980</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=4, tile_size=16384, bridge_k=1, phase=weighted, rounds=3, peak_allocated_gib=1.552, note=57-layer phase weights (15, 14, 14, 14); median over 3 rounds (round = weighted per-phase medians), speedup_vs_full_native_flash=5.051504035340882</td>
+</tr>
+</tbody>
+</table>
+<h4 id="stage-attention-40-rows">stage = <code>attention</code> (40 rows)</h4>
+<table>
+<thead>
+<tr>
+<th>stage</th>
+<th>backend</th>
+<th>topology</th>
+<th>resolution</th>
+<th>batch</th>
+<th>median_ms</th>
+<th>p10_ms</th>
+<th>p90_ms</th>
+<th>speedup_vs_full</th>
+<th>peak_alloc_gib</th>
+<th>peak_reserved_gib</th>
+<th>status</th>
+<th>extra</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>512</td>
+<td>1</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>unsupported</td>
+<td>image_tokens=1024, total_tokens=1536, tiles=16, tile_size=64, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=unsupported by build_plan: image_tokens/tiles=64 is not a multiple of 256 (not hacked around)</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>512</td>
+<td>1</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>unsupported</td>
+<td>image_tokens=1024, total_tokens=1536, tiles=16, tile_size=64, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=unsupported by build_plan: image_tokens/tiles=64 is not a multiple of 256 (not hacked around)</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>1</td>
+<td>0.430</td>
+<td>0.418</td>
+<td>0.447</td>
+<td></td>
+<td></td>
+<td>0.480</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.419, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 0.0725 ms/layer; setup 0.01s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=1.895436573538579</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>1</td>
+<td>0.252</td>
+<td>0.251</td>
+<td>0.252</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.136, quality_claimed=None, adapter=None, rounds=None, note=kernel 0.2513 + layout 0.0128/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=3.2374664699940157</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>2</td>
+<td>0.876</td>
+<td>0.870</td>
+<td>0.883</td>
+<td></td>
+<td></td>
+<td>0.529</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.495, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 0.3137 ms/layer; setup 0.01s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=1.7956717538012807</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>2</td>
+<td>0.481</td>
+<td>0.478</td>
+<td>0.482</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.253, quality_claimed=None, adapter=None, rounds=None, note=kernel 0.4804 + layout 0.0148/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=3.273057775377005</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>4</td>
+<td>1.653</td>
+<td>1.647</td>
+<td>1.659</td>
+<td></td>
+<td></td>
+<td>1.191</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.95, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 0.6623 ms/layer; setup 0.02s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=1.8673907346901006</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>4</td>
+<td>0.906</td>
+<td>0.891</td>
+<td>0.938</td>
+<td></td>
+<td></td>
+<td>0.557</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.506, quality_claimed=None, adapter=None, rounds=None, note=kernel 0.9054 + layout 0.0172/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=3.409060436526741</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>8</td>
+<td>3.201</td>
+<td>3.189</td>
+<td>3.211</td>
+<td></td>
+<td></td>
+<td>2.287</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=1.899, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 1.3073 ms/layer; setup 0.01s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=1.9709205790905011</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>8</td>
+<td>1.771</td>
+<td>1.748</td>
+<td>1.826</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=1.012, quality_claimed=None, adapter=None, rounds=None, note=kernel 1.7706 + layout 0.0251/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=3.561750454572031</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>1</td>
+<td>1.771</td>
+<td>1.766</td>
+<td>1.778</td>
+<td></td>
+<td></td>
+<td>4.959</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=4.817, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 0.2514 ms/layer; setup 0.03s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=5.754678682768149</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>1</td>
+<td>1.164</td>
+<td>1.158</td>
+<td>1.248</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.483, quality_claimed=None, adapter=None, rounds=None, note=kernel 1.1639 + layout 0.0280/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=8.75269448659437</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>2</td>
+<td>3.933</td>
+<td>3.922</td>
+<td>3.948</td>
+<td></td>
+<td></td>
+<td>5.340</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=5.104, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 1.1837 ms/layer; setup 0.03s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=5.334656173599193</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>2</td>
+<td>2.372</td>
+<td>2.336</td>
+<td>2.459</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.96, quality_claimed=None, adapter=None, rounds=None, note=kernel 2.3716 + layout 0.0247/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=8.8441652886563</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>4</td>
+<td>7.692</td>
+<td>7.660</td>
+<td>7.855</td>
+<td></td>
+<td></td>
+<td>5.840</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=5.684, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 2.3578 ms/layer; setup 0.03s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=5.436932956005546</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>4</td>
+<td>4.520</td>
+<td>4.462</td>
+<td>4.581</td>
+<td></td>
+<td></td>
+<td>1.963</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=1.919, quality_claimed=None, adapter=None, rounds=None, note=kernel 4.5195 + layout 0.0376/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=9.251656785733864</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>8</td>
+<td>15.225</td>
+<td>15.100</td>
+<td>15.558</td>
+<td></td>
+<td></td>
+<td>8.914</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=6.966, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 4.8133 ms/layer; setup 0.03s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=5.2950666323372175</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>8</td>
+<td>8.905</td>
+<td>8.821</td>
+<td>9.030</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=3.836, quality_claimed=None, adapter=None, rounds=None, note=kernel 8.9037 + layout 0.0673/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=9.053187712198804</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>4096</td>
+<td>1</td>
+<td>13.339</td>
+<td>13.187</td>
+<td>13.640</td>
+<td></td>
+<td></td>
+<td>70.627</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=16, tile_size=4096, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=70.259, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 0.9342 ms/layer; setup 0.36s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=11.505207183103176</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>4096</td>
+<td>1</td>
+<td>9.645</td>
+<td>9.525</td>
+<td>9.880</td>
+<td></td>
+<td></td>
+<td>1.986</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=16, tile_size=4096, bridge_k=3, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=1.897, quality_claimed=None, adapter=None, rounds=None, note=kernel 9.6437 + layout 0.0907/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=15.911100036039588</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>512</td>
+<td>1</td>
+<td>0.208</td>
+<td>0.202</td>
+<td>0.223</td>
+<td></td>
+<td></td>
+<td>0.170</td>
+<td>ok</td>
+<td>image_tokens=1024, total_tokens=1536, tiles=4, tile_size=256, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.132, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 0.0510 ms/layer; setup 0.16s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=0.5925700984457615</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>512</td>
+<td>1</td>
+<td>0.082</td>
+<td>0.081</td>
+<td>0.082</td>
+<td></td>
+<td></td>
+<td>0.064</td>
+<td>ok</td>
+<td>image_tokens=1024, total_tokens=1536, tiles=4, tile_size=256, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.038, quality_claimed=None, adapter=None, rounds=None, note=kernel 0.0813 + layout 0.0091/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=1.5117509819933734</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>1</td>
+<td>0.505</td>
+<td>0.493</td>
+<td>0.519</td>
+<td></td>
+<td></td>
+<td>0.480</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.419, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 0.0712 ms/layer; setup 0.01s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=1.6119230873625725</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>1</td>
+<td>0.315</td>
+<td>0.313</td>
+<td>0.316</td>
+<td></td>
+<td></td>
+<td>0.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.136, quality_claimed=None, adapter=None, rounds=None, note=kernel 0.3150 + layout 0.0128/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=2.5835124297250305</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>2</td>
+<td>1.032</td>
+<td>1.026</td>
+<td>1.042</td>
+<td></td>
+<td></td>
+<td>0.529</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.495, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 0.3106 ms/layer; setup 0.01s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=1.5250202044809433</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>2</td>
+<td>0.617</td>
+<td>0.607</td>
+<td>0.639</td>
+<td></td>
+<td></td>
+<td>0.309</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.253, quality_claimed=None, adapter=None, rounds=None, note=kernel 0.6171 + layout 0.0148/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=2.5482030154603748</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>4</td>
+<td>1.975</td>
+<td>1.969</td>
+<td>1.985</td>
+<td></td>
+<td></td>
+<td>1.191</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.95, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 0.6369 ms/layer; setup 0.01s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=1.563260231418827</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>4</td>
+<td>1.166</td>
+<td>1.150</td>
+<td>1.221</td>
+<td></td>
+<td></td>
+<td>0.557</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.506, quality_claimed=None, adapter=None, rounds=None, note=kernel 1.1659 + layout 0.0171/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=2.6474693315955617</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>8</td>
+<td>3.854</td>
+<td>3.835</td>
+<td>3.982</td>
+<td></td>
+<td></td>
+<td>2.287</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=1.899, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 1.2524 ms/layer; setup 0.01s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=1.6367691108486546</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>8</td>
+<td>2.294</td>
+<td>2.261</td>
+<td>2.382</td>
+<td></td>
+<td></td>
+<td>1.107</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=1.012, quality_claimed=None, adapter=None, rounds=None, note=kernel 2.2935 + layout 0.0244/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=2.7499002545143036</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>1</td>
+<td>3.259</td>
+<td>3.215</td>
+<td>3.330</td>
+<td></td>
+<td></td>
+<td>4.959</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=4.817, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 0.2065 ms/layer; setup 0.03s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=3.1268899414574984</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>1</td>
+<td>2.474</td>
+<td>2.449</td>
+<td>2.528</td>
+<td></td>
+<td></td>
+<td>0.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.483, quality_claimed=None, adapter=None, rounds=None, note=kernel 2.4734 + layout 0.0280/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=4.119717017580565</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>2</td>
+<td>7.003</td>
+<td>6.901</td>
+<td>7.170</td>
+<td></td>
+<td></td>
+<td>5.340</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=5.104, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 1.1136 ms/layer; setup 0.03s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=2.9957299077296162</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>2</td>
+<td>4.965</td>
+<td>4.921</td>
+<td>5.042</td>
+<td></td>
+<td></td>
+<td>1.012</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=0.96, quality_claimed=None, adapter=None, rounds=None, note=kernel 4.9646 + layout 0.0245/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=4.225354375324646</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>4</td>
+<td>14.095</td>
+<td>13.887</td>
+<td>14.381</td>
+<td></td>
+<td></td>
+<td>5.840</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=5.684, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 2.4218 ms/layer; setup 0.03s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=2.9670030985318143</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>4</td>
+<td>9.662</td>
+<td>9.553</td>
+<td>9.769</td>
+<td></td>
+<td></td>
+<td>1.963</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=1.919, quality_claimed=None, adapter=None, rounds=None, note=kernel 9.6611 + layout 0.0373/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=4.328299300315897</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>8</td>
+<td>28.117</td>
+<td>27.697</td>
+<td>28.494</td>
+<td></td>
+<td></td>
+<td>8.914</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=6.966, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 4.9150 ms/layer; setup 0.03s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=2.8671723384712524</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>8</td>
+<td>19.167</td>
+<td>19.039</td>
+<td>19.229</td>
+<td></td>
+<td></td>
+<td>3.920</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=3.837, quality_claimed=None, adapter=None, rounds=None, note=kernel 19.1655 + layout 0.0669/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=4.206108873927683</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>4096</td>
+<td>1</td>
+<td>39.525</td>
+<td>39.127</td>
+<td>39.799</td>
+<td></td>
+<td></td>
+<td>70.629</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=4, tile_size=16384, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=70.259, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=pack/unpack 0.9754 ms/layer; setup 0.40s; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=3.882787650563589</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>4096</td>
+<td>1</td>
+<td>30.381</td>
+<td>30.176</td>
+<td>30.574</td>
+<td></td>
+<td></td>
+<td>1.936</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=4, tile_size=16384, bridge_k=1, phase=weighted, per_image_ms=None, images_per_second=None, peak_allocated_gib=1.9, quality_claimed=None, adapter=None, rounds=None, note=kernel 30.3796 + layout 0.0903/57; speedup vs kernel-stage full flash SDPA at same (res,batch) (full attention has no layout cost), speedup_vs_full_native_flash=5.0513709232685535</td>
+</tr>
+</tbody>
+</table>
+<h4 id="stage-denoiser-64-rows">stage = <code>denoiser</code> (64 rows)</h4>
+<table>
+<thead>
+<tr>
+<th>stage</th>
+<th>backend</th>
+<th>topology</th>
+<th>resolution</th>
+<th>batch</th>
+<th>median_ms</th>
+<th>p10_ms</th>
+<th>p90_ms</th>
+<th>speedup_vs_full</th>
+<th>peak_alloc_gib</th>
+<th>peak_reserved_gib</th>
+<th>status</th>
+<th>extra</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>1024</td>
+<td>1</td>
+<td>197.583</td>
+<td>196.456</td>
+<td>198.995</td>
+<td></td>
+<td></td>
+<td>26.547</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.514, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0551157472085106</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>1</td>
+<td>208.473</td>
+<td>207.302</td>
+<td>211.477</td>
+<td></td>
+<td></td>
+<td>23.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=22.661, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>1024</td>
+<td>1</td>
+<td>193.498</td>
+<td>193.290</td>
+<td>193.688</td>
+<td></td>
+<td></td>
+<td>23.123</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=22.662, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0773906835338067</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>1024</td>
+<td>2</td>
+<td>390.390</td>
+<td>386.936</td>
+<td>391.639</td>
+<td></td>
+<td></td>
+<td>24.266</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=23.115, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0529285811218996</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>2</td>
+<td>411.053</td>
+<td>406.858</td>
+<td>414.311</td>
+<td></td>
+<td></td>
+<td>24.258</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=23.115, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>1024</td>
+<td>2</td>
+<td>373.034</td>
+<td>372.777</td>
+<td>373.590</td>
+<td></td>
+<td></td>
+<td>24.348</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=23.115, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.101918604322975</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>1024</td>
+<td>4</td>
+<td>767.558</td>
+<td>763.579</td>
+<td>768.279</td>
+<td></td>
+<td></td>
+<td>26.389</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=24.02, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0586721610836858</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>4</td>
+<td>812.593</td>
+<td>809.593</td>
+<td>814.249</td>
+<td></td>
+<td></td>
+<td>26.246</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=24.02, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>1024</td>
+<td>4</td>
+<td>725.860</td>
+<td>724.446</td>
+<td>727.176</td>
+<td></td>
+<td></td>
+<td>26.293</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=24.02, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.1194888827159952</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>1024</td>
+<td>8</td>
+<td>1523.675</td>
+<td>1521.614</td>
+<td>1525.162</td>
+<td></td>
+<td></td>
+<td>30.553</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.831, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.059797571612437</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>8</td>
+<td>1614.787</td>
+<td>1611.928</td>
+<td>1617.653</td>
+<td></td>
+<td></td>
+<td>30.375</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.831, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>1024</td>
+<td>8</td>
+<td>1433.435</td>
+<td>1429.709</td>
+<td>1435.824</td>
+<td></td>
+<td></td>
+<td>30.363</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.831, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.1265158623050624</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>2048</td>
+<td>1</td>
+<td>772.875</td>
+<td>771.443</td>
+<td>775.548</td>
+<td></td>
+<td></td>
+<td>29.371</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.516, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.4884850150430997</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16_superseded</td>
+<td>None</td>
+<td>2048</td>
+<td>1</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>oom</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=OutOfMemoryError('CUDA out of memory. Tried to allocate 25.52 GiB. GPU 0 has a total capacity of 79.11 GiB of which 4.45 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 48.70 GiB is allocated by PyTorch, and 25.29 GiB is reserved by PyTorch</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>1</td>
+<td>1150.413</td>
+<td>1145.047</td>
+<td>1155.002</td>
+<td></td>
+<td></td>
+<td>26.006</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=23.871, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>2048</td>
+<td>1</td>
+<td>713.819</td>
+<td>713.425</td>
+<td>714.199</td>
+<td></td>
+<td></td>
+<td>25.994</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=23.87, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.6116307777602303</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>2048</td>
+<td>2</td>
+<td>1556.672</td>
+<td>1552.541</td>
+<td>1562.275</td>
+<td></td>
+<td></td>
+<td>29.922</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.522, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.4777670337101896</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16_superseded</td>
+<td>None</td>
+<td>2048</td>
+<td>2</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>skipped_after_oom</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=None</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>2</td>
+<td>2300.399</td>
+<td>2299.201</td>
+<td>2303.612</td>
+<td></td>
+<td></td>
+<td>29.748</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.519, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>2048</td>
+<td>2</td>
+<td>1429.849</td>
+<td>1427.311</td>
+<td>1431.474</td>
+<td></td>
+<td></td>
+<td>29.736</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.521, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.608840413028875</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>2048</td>
+<td>4</td>
+<td>3152.136</td>
+<td>3144.994</td>
+<td>3156.011</td>
+<td></td>
+<td></td>
+<td>37.580</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=28.82, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.4655679727317819</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16_superseded</td>
+<td>None</td>
+<td>2048</td>
+<td>4</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>skipped_after_oom</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=None</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>4</td>
+<td>4619.669</td>
+<td>4618.781</td>
+<td>4621.105</td>
+<td></td>
+<td></td>
+<td>37.238</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=28.818, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>2048</td>
+<td>4</td>
+<td>2879.280</td>
+<td>2866.667</td>
+<td>2891.285</td>
+<td></td>
+<td></td>
+<td>37.203</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=28.819, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.6044531708871874</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>2048</td>
+<td>8</td>
+<td>6323.836</td>
+<td>6315.673</td>
+<td>6338.291</td>
+<td></td>
+<td></td>
+<td>53.666</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=35.418, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.472968736180111</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16_superseded</td>
+<td>None</td>
+<td>2048</td>
+<td>8</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>skipped_after_oom</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=None</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>8</td>
+<td>9314.813</td>
+<td>9305.657</td>
+<td>9329.762</td>
+<td></td>
+<td></td>
+<td>52.906</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=35.416, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>2048</td>
+<td>8</td>
+<td>5783.090</td>
+<td>5776.102</td>
+<td>5801.874</td>
+<td></td>
+<td></td>
+<td>52.914</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=35.418, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.610698233421229</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>4096</td>
+<td>1</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>oom</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=OutOfMemoryError('CUDA out of memory. Tried to allocate 195.01 GiB. GPU 0 has a total capacity of 79.11 GiB of which 53.43 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 24.94 GiB is allocated by PyTorch, and 68.93 MiB is reserved by PyTorc</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>4096</td>
+<td>1</td>
+<td>11128.352</td>
+<td>11115.416</td>
+<td>11132.760</td>
+<td></td>
+<td></td>
+<td>37.131</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=28.706, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>4096</td>
+<td>1</td>
+<td>3591.791</td>
+<td>3586.023</td>
+<td>3595.643</td>
+<td></td>
+<td></td>
+<td>37.146</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=28.706, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=3.0982739197737246</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>4096</td>
+<td>2</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>skipped_after_oom</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=None</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>4096</td>
+<td>2</td>
+<td>22110.508</td>
+<td>22088.471</td>
+<td>22132.330</td>
+<td></td>
+<td></td>
+<td>51.840</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=35.142, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>4096</td>
+<td>2</td>
+<td>7268.779</td>
+<td>7262.188</td>
+<td>7278.828</td>
+<td></td>
+<td></td>
+<td>51.840</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=35.142, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=3.0418460802635416</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>4096</td>
+<td>4</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>skipped_after_oom</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=None</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>4096</td>
+<td>4</td>
+<td>44702.680</td>
+<td>44363.254</td>
+<td>44731.875</td>
+<td></td>
+<td></td>
+<td>73.703</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=48.015, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>4096</td>
+<td>4</td>
+<td>14713.899</td>
+<td>14685.546</td>
+<td>14726.268</td>
+<td></td>
+<td></td>
+<td>73.703</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=48.015, kernel_options=None, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=3.038125953530466</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>4096</td>
+<td>8</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>skipped_after_oom</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=None</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>4096</td>
+<td>8</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>oom</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=OutOfMemoryError('CUDA out of memory. Tried to allocate 6.05 GiB. GPU 0 has a total capacity of 79.11 GiB of which 1.92 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 52.67 GiB is allocated by PyTorch, and 23.85 GiB is reserved by PyTorch b</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>4096</td>
+<td>8</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>oom</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=OutOfMemoryError('CUDA out of memory. Tried to allocate 6.05 GiB. GPU 0 has a total capacity of 79.11 GiB of which 1.92 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 52.67 GiB is allocated by PyTorch, and 23.85 GiB is reserved by PyTorch b</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>1</td>
+<td>177.075</td>
+<td>175.667</td>
+<td>181.094</td>
+<td></td>
+<td></td>
+<td>23.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=22.662, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.1773153808722376</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>2</td>
+<td>348.439</td>
+<td>345.616</td>
+<td>352.875</td>
+<td></td>
+<td></td>
+<td>24.258</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=23.116, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.1796977496824983</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>4</td>
+<td>686.392</td>
+<td>682.983</td>
+<td>690.919</td>
+<td></td>
+<td></td>
+<td>26.293</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=24.022, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.1838607176498133</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>8</td>
+<td>1357.237</td>
+<td>1353.277</td>
+<td>1358.621</td>
+<td></td>
+<td></td>
+<td>30.375</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.835, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.1897605118970564</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>1</td>
+<td>639.542</td>
+<td>632.565</td>
+<td>642.296</td>
+<td></td>
+<td></td>
+<td>26.006</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=23.873, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.7988060520530003</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>2</td>
+<td>1285.050</td>
+<td>1281.888</td>
+<td>1287.299</td>
+<td></td>
+<td></td>
+<td>29.748</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.524, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.7901235388825312</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>4</td>
+<td>2561.972</td>
+<td>2553.401</td>
+<td>2564.130</td>
+<td></td>
+<td></td>
+<td>37.250</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=28.827, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.8031690691637765</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>8</td>
+<td>5118.901</td>
+<td>5113.201</td>
+<td>5124.867</td>
+<td></td>
+<td></td>
+<td>52.924</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=35.432, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.8196900484370262</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>4096</td>
+<td>1</td>
+<td>2757.367</td>
+<td>2749.397</td>
+<td>2761.012</td>
+<td></td>
+<td></td>
+<td>37.135</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=16, tile_size=4096, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=28.717, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=4.035861849139048</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>4096</td>
+<td>2</td>
+<td>5647.049</td>
+<td>5635.726</td>
+<td>5663.738</td>
+<td></td>
+<td></td>
+<td>51.859</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=16, tile_size=4096, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=35.161, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=3.9154093554812404</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>4096</td>
+<td>4</td>
+<td>11365.892</td>
+<td>11349.012</td>
+<td>11374.657</td>
+<td></td>
+<td></td>
+<td>73.738</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=16, tile_size=4096, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=48.05, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=3.9330550857019917</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>4096</td>
+<td>8</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>oom</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=16, tile_size=4096, bridge_k=3, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=OutOfMemoryError('CUDA out of memory. Tried to allocate 6.05 GiB. GPU 0 has a total capacity of 79.11 GiB of which 1.84 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 52.73 GiB is allocated by PyTorch, and 23.86 GiB is reserved by PyTorch b</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>1</td>
+<td>179.918</td>
+<td>178.716</td>
+<td>182.928</td>
+<td></td>
+<td></td>
+<td>23.229</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=22.662, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.1587124537045281</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>2</td>
+<td>355.986</td>
+<td>352.880</td>
+<td>361.008</td>
+<td></td>
+<td></td>
+<td>24.258</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=23.116, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.1546888495964254</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>4</td>
+<td>700.208</td>
+<td>697.657</td>
+<td>702.763</td>
+<td></td>
+<td></td>
+<td>26.293</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=24.022, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.1605023743918015</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>8</td>
+<td>1388.850</td>
+<td>1384.748</td>
+<td>1390.389</td>
+<td></td>
+<td></td>
+<td>30.375</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.835, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.1626794106978386</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>1</td>
+<td>712.444</td>
+<td>707.665</td>
+<td>714.404</td>
+<td></td>
+<td></td>
+<td>26.006</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=23.874, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.6147413942546107</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>2</td>
+<td>1434.425</td>
+<td>1430.916</td>
+<td>1437.572</td>
+<td></td>
+<td></td>
+<td>29.748</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=25.524, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.6037081538314772</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>4</td>
+<td>2854.865</td>
+<td>2847.361</td>
+<td>2857.177</td>
+<td></td>
+<td></td>
+<td>37.250</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=28.827, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.6181743805001854</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>8</td>
+<td>5739.725</td>
+<td>5717.669</td>
+<td>5741.940</td>
+<td></td>
+<td></td>
+<td>52.924</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=35.433, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=1.6228673731912684</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>4096</td>
+<td>1</td>
+<td>3937.594</td>
+<td>3928.864</td>
+<td>3942.697</td>
+<td></td>
+<td></td>
+<td>37.152</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=4, tile_size=16384, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=28.723, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=2.8261807622455923</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>4096</td>
+<td>2</td>
+<td>7951.405</td>
+<td>7903.882</td>
+<td>7984.617</td>
+<td></td>
+<td></td>
+<td>51.865</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=4, tile_size=16384, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=35.168, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=2.780704508327025</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>4096</td>
+<td>4</td>
+<td>16014.372</td>
+<td>15989.276</td>
+<td>16020.892</td>
+<td></td>
+<td></td>
+<td>73.756</td>
+<td>ok</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=4, tile_size=16384, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=48.056, quality_claimed=False, adapter=None, rounds=None, note=None, speedup_vs_full_native_flash=2.791410084093774</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>4096</td>
+<td>8</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td></td>
+<td>None</td>
+<td>oom</td>
+<td>image_tokens=65536, total_tokens=66048, tiles=4, tile_size=16384, bridge_k=1, phase=None, per_image_ms=None, images_per_second=None, peak_allocated_gib=None, kernel_options=None, quality_claimed=None, adapter=None, rounds=None, note=OutOfMemoryError('CUDA out of memory. Tried to allocate 6.05 GiB. GPU 0 has a total capacity of 79.11 GiB of which 1.85 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 52.74 GiB is allocated by PyTorch, and 23.85 GiB is reserved by PyTorch b</td>
+</tr>
+</tbody>
+</table>
+<h4 id="stage-generation-48-rows">stage = <code>generation</code> (48 rows)</h4>
+<table>
+<thead>
+<tr>
+<th>stage</th>
+<th>backend</th>
+<th>topology</th>
+<th>resolution</th>
+<th>batch</th>
+<th>median_ms</th>
+<th>p10_ms</th>
+<th>p90_ms</th>
+<th>speedup_vs_full</th>
+<th>peak_alloc_gib</th>
+<th>peak_reserved_gib</th>
+<th>status</th>
+<th>extra</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>1024</td>
+<td>1</td>
+<td>5522.058</td>
+<td>5516.191</td>
+<td>5522.058</td>
+<td></td>
+<td></td>
+<td>27.176</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5522.05810546875, images_per_second=0.18109190104494802, peak_allocated_gib=22.825, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.053410438869325</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>1</td>
+<td>5816.994</td>
+<td>5801.069</td>
+<td>5816.994</td>
+<td></td>
+<td></td>
+<td>27.172</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5816.99365234375, images_per_second=0.17191010679495683, peak_allocated_gib=22.825, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>1024</td>
+<td>1</td>
+<td>5404.457</td>
+<td>5398.323</td>
+<td>5404.457</td>
+<td></td>
+<td></td>
+<td>27.059</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5404.45703125, images_per_second=0.18503246380121732, peak_allocated_gib=22.825, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0763326674092057</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>1024</td>
+<td>2</td>
+<td>10897.390</td>
+<td>10888.021</td>
+<td>10897.390</td>
+<td></td>
+<td></td>
+<td>27.822</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5448.69482421875, images_per_second=0.1835301906715583, peak_allocated_gib=23.275, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0565301663860691</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>2</td>
+<td>11513.421</td>
+<td>11485.561</td>
+<td>11513.421</td>
+<td></td>
+<td></td>
+<td>27.795</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5756.71044921875, images_per_second=0.1737103175192199, peak_allocated_gib=23.275, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>1024</td>
+<td>2</td>
+<td>10460.448</td>
+<td>10437.744</td>
+<td>10460.448</td>
+<td></td>
+<td></td>
+<td>27.904</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5230.22412109375, images_per_second=0.19119639557451296, peak_allocated_gib=23.275, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.1006622882567603</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>1024</td>
+<td>4</td>
+<td>21487.209</td>
+<td>21477.514</td>
+<td>21487.209</td>
+<td></td>
+<td></td>
+<td>28.721</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5371.80224609375, images_per_second=0.18615726234657592, peak_allocated_gib=24.185, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0514910260473822</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>4</td>
+<td>22593.607</td>
+<td>22548.143</td>
+<td>22593.607</td>
+<td></td>
+<td></td>
+<td>28.662</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5648.40185546875, images_per_second=0.17704122787081905, peak_allocated_gib=24.185, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>1024</td>
+<td>4</td>
+<td>20340.289</td>
+<td>20322.814</td>
+<td>20340.289</td>
+<td></td>
+<td></td>
+<td>28.627</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5085.072265625, images_per_second=0.19665403907039486, peak_allocated_gib=24.185, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.1107810391706423</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>1024</td>
+<td>8</td>
+<td>42561.848</td>
+<td>42534.586</td>
+<td>42561.848</td>
+<td></td>
+<td></td>
+<td>30.732</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5320.23095703125, images_per_second=0.18796176483248228, peak_allocated_gib=26.0, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0454169956532924</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1024</td>
+<td>8</td>
+<td>44494.879</td>
+<td>44473.660</td>
+<td>44494.879</td>
+<td></td>
+<td></td>
+<td>30.545</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5561.85986328125, images_per_second=0.17979597195569116, peak_allocated_gib=26.0, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>1024</td>
+<td>8</td>
+<td>40124.840</td>
+<td>40120.289</td>
+<td>40124.840</td>
+<td></td>
+<td></td>
+<td>30.545</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=5015.60498046875, images_per_second=0.19937774284340504, peak_allocated_gib=26.0, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.108911065552345</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>2048</td>
+<td>1</td>
+<td>21597.354</td>
+<td>21541.611</td>
+<td>21597.354</td>
+<td></td>
+<td></td>
+<td>29.014</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=21597.353515625, images_per_second=0.04630196932584966, peak_allocated_gib=24.038, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.477113488206789</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>1</td>
+<td>31901.742</td>
+<td>31880.961</td>
+<td>31901.742</td>
+<td></td>
+<td></td>
+<td>28.918</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=31901.7421875, images_per_second=0.031346250437439376, peak_allocated_gib=24.038, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>2048</td>
+<td>1</td>
+<td>20114.354</td>
+<td>20092.668</td>
+<td>20114.354</td>
+<td></td>
+<td></td>
+<td>28.918</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=20114.353515625, images_per_second=0.049715741508828085, peak_allocated_gib=24.038, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.586018768275026</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>2048</td>
+<td>2</td>
+<td>43445.613</td>
+<td>43363.977</td>
+<td>43445.613</td>
+<td></td>
+<td></td>
+<td>31.090</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=21722.806640625, images_per_second=0.046034567104687375, peak_allocated_gib=25.69, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.4692731402596835</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>2</td>
+<td>63833.473</td>
+<td>63826.379</td>
+<td>63833.473</td>
+<td></td>
+<td></td>
+<td>30.922</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=31916.736328125, images_per_second=0.03133152430497102, peak_allocated_gib=25.69, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>2048</td>
+<td>2</td>
+<td>40361.852</td>
+<td>40308.285</td>
+<td>40361.852</td>
+<td></td>
+<td></td>
+<td>30.902</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=20180.92578125, images_per_second=0.04955174063070462, peak_allocated_gib=25.69, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.5815298403098377</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>2048</td>
+<td>4</td>
+<td>87651.516</td>
+<td>87576.477</td>
+<td>87651.516</td>
+<td></td>
+<td></td>
+<td>37.752</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=21912.87890625, images_per_second=0.045635263366274506, peak_allocated_gib=29.001, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.4555601666186249</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>4</td>
+<td>127582.055</td>
+<td>127551.891</td>
+<td>127582.055</td>
+<td></td>
+<td></td>
+<td>37.414</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=31895.513671875, images_per_second=0.03135237169363368, peak_allocated_gib=29.0, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>2048</td>
+<td>4</td>
+<td>81195.219</td>
+<td>80869.984</td>
+<td>81195.219</td>
+<td></td>
+<td></td>
+<td>37.379</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=20298.8046875, images_per_second=0.049263984524950864, peak_allocated_gib=29.001, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.5713000919466087</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>2048</td>
+<td>8</td>
+<td>174774.594</td>
+<td>174052.438</td>
+<td>174774.594</td>
+<td></td>
+<td></td>
+<td>53.846</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=21846.82421875, images_per_second=0.04577324328639728, peak_allocated_gib=35.622, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.4504353553961558</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2048</td>
+<td>8</td>
+<td>253499.250</td>
+<td>253292.297</td>
+<td>253499.250</td>
+<td></td>
+<td></td>
+<td>53.096</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=31687.40625, images_per_second=0.03155827877202793, peak_allocated_gib=35.621, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.0</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>2048</td>
+<td>8</td>
+<td>164232.391</td>
+<td>164158.844</td>
+<td>164232.391</td>
+<td></td>
+<td></td>
+<td>53.096</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=None, tile_size=None, bridge_k=None, phase=None, per_image_ms=20529.048828125, images_per_second=0.048711462882293416, peak_allocated_gib=35.621, kernel_options=None, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.5435399133830272</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>1</td>
+<td>4964.591</td>
+<td>4951.815</td>
+<td>4964.591</td>
+<td></td>
+<td></td>
+<td>27.453</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=4964.59130859375, images_per_second=0.20142644939755494, peak_allocated_gib=23.106, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training_16tile_k3/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=1.1716963775597167</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3_lora_unmerged</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>1</td>
+<td>7036.722</td>
+<td>7036.224</td>
+<td>7036.722</td>
+<td></td>
+<td></td>
+<td>27.348</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=7036.7216796875, images_per_second=0.1421116317399113, peak_allocated_gib=23.389, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training_16tile_k3/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=0.8266624597552765</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>2</td>
+<td>9764.187</td>
+<td>9745.931</td>
+<td>9764.187</td>
+<td></td>
+<td></td>
+<td>28.104</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=4882.09326171875, images_per_second=0.20483017148425964, peak_allocated_gib=23.555, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training_16tile_k3/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=1.179147988498706</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3_lora_unmerged</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>2</td>
+<td>13588.698</td>
+<td>13574.302</td>
+<td>13588.698</td>
+<td></td>
+<td></td>
+<td>27.295</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=6794.34912109375, images_per_second=0.14718113275860348, peak_allocated_gib=24.133, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training_16tile_k3/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=0.8472791648793047</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>4</td>
+<td>19059.789</td>
+<td>19049.350</td>
+<td>19059.789</td>
+<td></td>
+<td></td>
+<td>29.002</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=4764.947265625, images_per_second=0.2098659112586913, peak_allocated_gib=24.464, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training_16tile_k3/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=1.185407002553232</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3_lora_unmerged</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>4</td>
+<td>26390.160</td>
+<td>26359.230</td>
+<td>26390.160</td>
+<td></td>
+<td></td>
+<td>28.848</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=6597.5400390625, images_per_second=0.1515716455041171, peak_allocated_gib=25.621, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training_16tile_k3/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=0.8561375637019065</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>8</td>
+<td>37623.531</td>
+<td>37609.207</td>
+<td>37623.531</td>
+<td></td>
+<td></td>
+<td>30.826</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=4702.94140625, images_per_second=0.21263288517076664, peak_allocated_gib=26.281, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training_16tile_k3/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=1.1826343096449778</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3_lora_unmerged</td>
+<td>t16k3</td>
+<td>1024</td>
+<td>8</td>
+<td>52330.203</td>
+<td>52325.645</td>
+<td>52330.203</td>
+<td></td>
+<td></td>
+<td>33.045</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=16, tile_size=256, bridge_k=3, phase=None, per_image_ms=6541.275390625, images_per_second=0.15287538595809722, peak_allocated_gib=28.598, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training_16tile_k3/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=0.8502714732439709</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>1</td>
+<td>17645.447</td>
+<td>17643.211</td>
+<td>17645.447</td>
+<td></td>
+<td></td>
+<td>28.934</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=None, per_image_ms=17645.447265625, images_per_second=0.056671842030782335, peak_allocated_gib=24.039, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.8079304937567444</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>2</td>
+<td>35314.895</td>
+<td>35243.992</td>
+<td>35314.895</td>
+<td></td>
+<td></td>
+<td>30.904</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=None, per_image_ms=17657.447265625, images_per_second=0.05663332785066677, peak_allocated_gib=25.69, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.8075509923939892</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>4</td>
+<td>70068.023</td>
+<td>69990.281</td>
+<td>70068.023</td>
+<td></td>
+<td></td>
+<td>37.764</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=None, per_image_ms=17517.005859375, images_per_second=0.05708738171511233, peak_allocated_gib=29.001, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.8208313639859124</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>2048</td>
+<td>8</td>
+<td>139190.484</td>
+<td>139098.406</td>
+<td>139190.484</td>
+<td></td>
+<td></td>
+<td>53.107</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=16, tile_size=1024, bridge_k=3, phase=None, per_image_ms=17398.810546875, images_per_second=0.05747519333611055, peak_allocated_gib=35.622, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.8212398005386279</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>1</td>
+<td>5103.193</td>
+<td>5098.327</td>
+<td>5103.193</td>
+<td></td>
+<td></td>
+<td>27.457</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=5103.19287109375, images_per_second=0.19595575265523393, peak_allocated_gib=23.104, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=1.1398733693357377</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1_lora_unmerged</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>1</td>
+<td>7140.019</td>
+<td>7129.348</td>
+<td>7140.019</td>
+<td></td>
+<td></td>
+<td>27.348</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=7140.01904296875, images_per_second=0.14005564886899935, peak_allocated_gib=23.389, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=0.8147028204458543</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>2</td>
+<td>9995.399</td>
+<td>9975.711</td>
+<td>9995.399</td>
+<td></td>
+<td></td>
+<td>28.100</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=4997.69970703125, images_per_second=0.20009205406901553, peak_allocated_gib=23.554, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=1.1518720184647449</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1_lora_unmerged</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>2</td>
+<td>13784.998</td>
+<td>13780.902</td>
+<td>13784.998</td>
+<td></td>
+<td></td>
+<td>27.295</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=6892.4990234375, images_per_second=0.14508525813345266, peak_allocated_gib=24.133, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=0.8352138215244466</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>4</td>
+<td>19534.578</td>
+<td>19525.260</td>
+<td>19534.578</td>
+<td></td>
+<td></td>
+<td>28.998</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=4883.64453125, images_per_second=0.20476510802559245, peak_allocated_gib=24.463, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=1.1565956161070154</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1_lora_unmerged</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>4</td>
+<td>26820.828</td>
+<td>26818.863</td>
+<td>26820.828</td>
+<td></td>
+<td></td>
+<td>28.848</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=6705.20703125, images_per_second=0.14913782607150577, peak_allocated_gib=25.621, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=0.8423903735028688</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>8</td>
+<td>38479.051</td>
+<td>38466.875</td>
+<td>38479.051</td>
+<td></td>
+<td></td>
+<td>30.842</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=4809.88134765625, images_per_second=0.20790533647722476, peak_allocated_gib=26.281, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=1.1563403463146598</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1_lora_unmerged</td>
+<td>t4k1</td>
+<td>1024</td>
+<td>8</td>
+<td>53144.102</td>
+<td>53139.316</td>
+<td>53144.102</td>
+<td></td>
+<td></td>
+<td>33.045</td>
+<td>ok</td>
+<td>image_tokens=4096, total_tokens=4608, tiles=4, tile_size=1024, bridge_k=1, phase=None, per_image_ms=6643.0126953125, images_per_second=0.1505341094268311, peak_allocated_gib=28.598, quality_claimed=True, adapter=/tmp/formal/flux/experiment/training/checkpoints/adapter_step001792.pt, rounds=3, note=None, speedup_vs_full_native_flash=0.8372496212758794</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>1</td>
+<td>19826.000</td>
+<td>19807.842</td>
+<td>19826.000</td>
+<td></td>
+<td></td>
+<td>28.918</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=None, per_image_ms=19826.0, images_per_second=0.05043881771411278, peak_allocated_gib=24.039, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.609086158957934</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>2</td>
+<td>39555.258</td>
+<td>39421.258</td>
+<td>39555.258</td>
+<td></td>
+<td></td>
+<td>30.924</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=None, per_image_ms=19777.62890625, images_per_second=0.050562178345048545, peak_allocated_gib=25.691, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.6137797144145463</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>4</td>
+<td>78292.688</td>
+<td>78238.625</td>
+<td>78292.688</td>
+<td></td>
+<td></td>
+<td>37.764</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=None, per_image_ms=19573.171875, images_per_second=0.05109033969487891, peak_allocated_gib=29.001, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.6295526282387482</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>2048</td>
+<td>8</td>
+<td>156787.891</td>
+<td>156487.078</td>
+<td>156787.891</td>
+<td></td>
+<td></td>
+<td>53.111</td>
+<td>ok</td>
+<td>image_tokens=16384, total_tokens=16896, tiles=4, tile_size=4096, bridge_k=1, phase=None, per_image_ms=19598.486328125, images_per_second=0.05102434867967024, peak_allocated_gib=35.622, quality_claimed=False, adapter=None, rounds=3, note=None, speedup_vs_full_native_flash=1.6168292652543619</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Rows with status != ok (<strong>OOM / unsupported / untested, as recorded, never estimated</strong>): 15</li>
+<li>kernel paired t16k3 512 b1: <strong>unsupported</strong> unsupported by build_plan: image_tokens/tiles=64 is not a multiple of 256 (not hacked around)</li>
+<li>attention persistent_paired t16k3 512 b1: <strong>unsupported</strong> unsupported by build_plan: image_tokens/tiles=64 is not a multiple of 256 (not hacked around)</li>
+<li>attention flex64_per_call t16k3 512 b1: <strong>unsupported</strong> unsupported by build_plan: image_tokens/tiles=64 is not a multiple of 256 (not hacked around)</li>
+<li>denoiser clear_local16_superseded None 2048 b1: <strong>oom</strong> OutOfMemoryError('CUDA out of memory. Tried to allocate 25.52 GiB. GPU 0 has a total capacity of 79.11 GiB of which 4.45 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 48.70 GiB is allocated by PyTorch, and 25.29 GiB is reserved by PyTorch </li>
+<li>denoiser clear_local16_superseded None 2048 b2: <strong>skipped_after_oom</strong> </li>
+<li>denoiser clear_local16_superseded None 2048 b4: <strong>skipped_after_oom</strong> </li>
+<li>denoiser clear_local16_superseded None 2048 b8: <strong>skipped_after_oom</strong> </li>
+<li>denoiser clear_local16 None 4096 b1: <strong>oom</strong> OutOfMemoryError('CUDA out of memory. Tried to allocate 195.01 GiB. GPU 0 has a total capacity of 79.11 GiB of which 53.43 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 24.94 GiB is allocated by PyTorch, and 68.93 MiB is reserved by PyTorc</li>
+<li>denoiser clear_local16 None 4096 b2: <strong>skipped_after_oom</strong> </li>
+<li>denoiser clear_local16 None 4096 b4: <strong>skipped_after_oom</strong> </li>
+<li>denoiser clear_local16 None 4096 b8: <strong>skipped_after_oom</strong> </li>
+<li>denoiser paired_t4k1 t4k1 4096 b8: <strong>oom</strong> OutOfMemoryError('CUDA out of memory. Tried to allocate 6.05 GiB. GPU 0 has a total capacity of 79.11 GiB of which 1.85 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 52.74 GiB is allocated by PyTorch, and 23.85 GiB is reserved by PyTorch b</li>
+<li>denoiser paired_t16k3 t16k3 4096 b8: <strong>oom</strong> OutOfMemoryError('CUDA out of memory. Tried to allocate 6.05 GiB. GPU 0 has a total capacity of 79.11 GiB of which 1.84 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 52.73 GiB is allocated by PyTorch, and 23.86 GiB is reserved by PyTorch b</li>
+<li>denoiser full_native_flash None 4096 b8: <strong>oom</strong> OutOfMemoryError('CUDA out of memory. Tried to allocate 6.05 GiB. GPU 0 has a total capacity of 79.11 GiB of which 1.92 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 52.67 GiB is allocated by PyTorch, and 23.85 GiB is reserved by PyTorch b</li>
+<li>denoiser sparge_topk0.25 None 4096 b8: <strong>oom</strong> OutOfMemoryError('CUDA out of memory. Tried to allocate 6.05 GiB. GPU 0 has a total capacity of 79.11 GiB of which 1.92 GiB is free. Including non-PyTorch memory, this process has 0 bytes memory in use. Of the allocated memory 52.67 GiB is allocated by PyTorch, and 23.85 GiB is reserved by PyTorch b</li>
+<li>Required 1024/2048 points without any row (<strong>untested</strong>): none</li>
+<li>Optional 512 / 4096 points present: attention/t16k3/4096, attention/t16k3/512, attention/t4k1/4096, attention/t4k1/512, denoiser/None/4096, denoiser/t16k3/4096, denoiser/t4k1/4096, kernel/None/4096, kernel/None/512, kernel/t16k3/4096, kernel/t16k3/512, kernel/t4k1/4096, kernel/t4k1/512</li>
+</ul>
+<h2 id="5-competitor-screening-evaluationdev32screeningjson-development-prompts-not-the-evaluation-set">5. Competitor screening (<code>evaluation/dev32/screening.json</code>, development prompts, not the evaluation set)</h2>
+<table>
+<thead>
+<tr>
+<th>candidate</th>
+<th style="text-align: right;">median e2e s (1024, batch 1, 28 steps)</th>
+<th>status</th>
+<th>chosen</th>
+<th>notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>clear_local16</td>
+<td style="text-align: right;">5.56</td>
+<td>ok</td>
+<td><strong>yes</strong></td>
+<td>n_timed=32, n_images=32, p10_e2e_s=5.533519124612212, p90_e2e_s=5.573658152483404, peak_alloc_gib=24.74544095993042, timing_file=/tmp/formal/flux/experiment/evaluation/dev32/clear_local16/timing_shard0.jsonl</td>
+</tr>
+<tr>
+<td>clear_local32</td>
+<td style="text-align: right;">5.92</td>
+<td>ok</td>
+<td></td>
+<td>n_timed=32, n_images=32, p10_e2e_s=5.915570920333266, p90_e2e_s=5.935022136196494, peak_alloc_gib=24.74544095993042, timing_file=/tmp/formal/flux/experiment/evaluation/dev32/clear_local32/timing_shard0.jsonl</td>
+</tr>
+<tr>
+<td>clear_local8_down4</td>
+<td style="text-align: right;">5.79</td>
+<td>ok</td>
+<td></td>
+<td>n_timed=32, n_images=32, p10_e2e_s=5.782667595893145, p90_e2e_s=5.793521483428776, peak_alloc_gib=24.745468139648438, timing_file=/tmp/formal/flux/experiment/evaluation/dev32/clear_local8_down4/timing_shard0.jsonl</td>
+</tr>
+<tr>
+<td>sparge_topk0.25</td>
+<td style="text-align: right;">5.96</td>
+<td>ok</td>
+<td><strong>yes</strong></td>
+<td>n_timed=32, n_images=32, p10_e2e_s=5.9498769752681255, p90_e2e_s=5.964874570257962, peak_alloc_gib=24.745418071746826, timing_file=/tmp/formal/flux/experiment/evaluation/dev32/sparge_topk0.25/timing_shard0.jsonl</td>
+</tr>
+<tr>
+<td>sparge_topk0.5</td>
+<td style="text-align: right;">5.99</td>
+<td>ok</td>
+<td></td>
+<td>n_timed=32, n_images=32, p10_e2e_s=5.987255319021642, p90_e2e_s=6.00808463525027, peak_alloc_gib=24.745418071746826, timing_file=/tmp/formal/flux/experiment/evaluation/dev32/sparge_topk0.5/timing_shard0.jsonl</td>
+</tr>
+<tr>
+<td>sparge_topk0.75</td>
+<td style="text-align: right;">6.17</td>
+<td>ok</td>
+<td></td>
+<td>n_timed=32, n_images=32, p10_e2e_s=6.159369124099612, p90_e2e_s=6.184339641593397, peak_alloc_gib=24.745418071746826, timing_file=/tmp/formal/flux/experiment/evaluation/dev32/sparge_topk0.75/timing_shard0.jsonl</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Selection rule (spec §4): per family, the candidate with the lowest median end-to-end latency among candidates that completed generation normally; "fastest among tested candidates" only, not a claim over all configurations. Quality of the chosen configuration is reported as measured, not used to re-select.</li>
+<li>Screening metadata: rule=lowest median end-to-end seconds (1024, batch 1, 28 steps, VAE decode included, PNG excluded) among candidates that completed; quality never changes the choice; "fastest among tested candidates", not among all possible configurations, n_prompts=32, noise_band=0.03, decided=True</li>
+</ul>
+<h2 id="6-showcase-10-pre-selected-prompts-evaluationshowcase10indexhtml">6. Showcase: 10 pre-selected prompts (<code>evaluation/showcase10/index.html</code>)</h2>
+<ul>
+<li>Selected on the devbox from the frozen evaluation manifest before any stage-2 image existed; seed 2707; rule: shuffle manifest indices with random.Random(2707); for each category in the fixed order take the first unused caption matching a primary keyword (whole word), else the first matching a fallback keyword; captions unedited; selected before any stage-2 image or metric existed</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">#</th>
+<th>category</th>
+<th>prompt_id</th>
+<th style="text-align: right;">image_id</th>
+<th style="text-align: right;">seed</th>
+<th>matched keywords (source)</th>
+<th>caption (unedited)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td>people</td>
+<td><code>coco_evaluation_738548</code></td>
+<td style="text-align: right;">297698</td>
+<td style="text-align: right;">2707</td>
+<td>man (primary)</td>
+<td>A man flying through he air while riding</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td>multi-person interaction</td>
+<td><code>coco_evaluation_25538</code></td>
+<td style="text-align: right;">299553</td>
+<td style="text-align: right;">2707</td>
+<td>crowd (primary)</td>
+<td>A crowd of people gathering and flying kites</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td>animals</td>
+<td><code>coco_evaluation_625142</code></td>
+<td style="text-align: right;">281447</td>
+<td style="text-align: right;">2707</td>
+<td>horse (primary)</td>
+<td>a brown horse in the field gazing around</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td>indoor</td>
+<td><code>coco_evaluation_588291</code></td>
+<td style="text-align: right;">282296</td>
+<td style="text-align: right;">2707</td>
+<td>refrigerator (primary)</td>
+<td>An old refrigerator sitting in a room</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td>architecture</td>
+<td><code>coco_evaluation_380717</code></td>
+<td style="text-align: right;">57725</td>
+<td style="text-align: right;">2707</td>
+<td>tower, bridge, clock tower (primary)</td>
+<td>A bridge over water with buildings and clock tower in the background.</td>
+</tr>
+<tr>
+<td style="text-align: right;">6</td>
+<td>traffic/vehicles</td>
+<td><code>coco_evaluation_9919</code></td>
+<td style="text-align: right;">338325</td>
+<td style="text-align: right;">2707</td>
+<td>airplane (primary)</td>
+<td>An airplane is ascending into the white sky</td>
+</tr>
+<tr>
+<td style="text-align: right;">7</td>
+<td>natural landscape</td>
+<td><code>coco_evaluation_683761</code></td>
+<td style="text-align: right;">322724</td>
+<td style="text-align: right;">2707</td>
+<td>hills, snowy (primary)</td>
+<td>A man is standing on a snowy hills with his skiis.</td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td>sky or water</td>
+<td><code>coco_evaluation_127483</code></td>
+<td style="text-align: right;">516173</td>
+<td style="text-align: right;">2707</td>
+<td>ocean (primary)</td>
+<td>A woman entering the ocean with a surfboard</td>
+</tr>
+<tr>
+<td style="text-align: right;">9</td>
+<td>food or still life</td>
+<td><code>coco_evaluation_622846</code></td>
+<td style="text-align: right;">410934</td>
+<td style="text-align: right;">2707</td>
+<td>broccoli (primary)</td>
+<td>A small broccoli plant is shown growing among pine needles.</td>
+</tr>
+<tr>
+<td style="text-align: right;">10</td>
+<td>complex object relations</td>
+<td><code>coco_evaluation_242733</code></td>
+<td style="text-align: right;">14038</td>
+<td style="text-align: right;">2707</td>
+<td>filled with (primary)</td>
+<td>a living room filled with some balloons and a bookshelf</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Page: <code>evaluation/showcase10/index.html</code> (present); originals under <code>evaluation/showcase10/images/&lt;method&gt;/&lt;prompt_id&gt;.png</code>; column availability: coco_real=10/10, full_flux=10/10, ours=10/10, ours16tile=10/10, clear_local16=10/10, sparge_topk0.25=10/10</li>
+<li>Columns: COCO real | Full FLUX | ours4tile | ours16tile | CLEAR | Sparge; a method without images shows "not available". No visual analysis was made by the agent.</li>
+</ul>
+<h2 id="7-reproduction-commands-pod-source-tmpformalfluxenvsh-first-exp-experiment-dir-hdfs_exp-hdfs-mirror">7. Reproduction commands (pod; <code>source /tmp/formal/flux/env.sh</code> first, <code>$EXP</code> = experiment dir, <code>$HDFS_EXP</code> = HDFS mirror)</h2>
+<pre><code class="language-bash">bash experiments/coco1024/scripts/stage2_eval.sh                  # metrics (2 GPUs) + showcase + compare page + report + HDFS mirror
+python -m experiments.coco1024.showcase --exp $EXP --select-only   # the 10-prompt selection (deterministic, verified against the frozen selection.json)
+python -m experiments.coco1024.metrics --exp $EXP --methods auto --stage all --inception-weights $F/weights/weights-inception-2015-12-05-6726825d.pth
+python -m experiments.coco1024.compare_page --exp $EXP --methods auto --page index_stage2.html
+python -m experiments.coco1024.report --exp $EXP --stage2
+# kernel bench: see experiments/kernel_bench/ (summary.json schema: stage, backend, topology, resolution, batch, median_ms, p10_ms, p90_ms, speedup_vs_full, peak_alloc_gib, peak_reserved_gib, status)
+# 16-tile training: COCO1024_TOPOLOGY=t16k3 bash experiments/coco1024/scripts/launch_train.sh $EXP &lt;microbatch&gt;   (outputs to training_16tile_k3/)
+# competitors: /tmp/formal/third_party/{clear,sparge} own venvs; glue scripts write evaluation/clear_&lt;cfg&gt;/ and evaluation/sparge_&lt;cfg&gt;/ in the same layout as evaluation/ours/
+</code></pre>
+<h2 id="8-explicit-status-list">8. Explicit status list</h2>
+<ul>
+<li>Methods evaluated: full_flux, ours, ours16tile, clear_local16, sparge_topk0.25; expected set Full FLUX / ours4tile / ours16tile / CLEAR / Sparge — missing: none</li>
+<li>Kernel bench rows with status != ok and required points without rows are listed in section 4; screening candidates that failed are listed in section 5 with their status.</li>
+<li>Adapters: ours4tile and ours16tile have 1024 adapters only; every other (topology, resolution) in the speed tables is kernel/denoiser/e2e timing without a trained adapter (quality not claimed). CLEAR uses its official checkpoints; SpargeAttn is training-free.</li>
+<li>Literature numbers are not placed next to measured ones; FLOPs are not used in place of measured speedups.</li>
+</ul></main></html>

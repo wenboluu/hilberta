@@ -1,0 +1,14 @@
+{
+  "resolution": 2048,
+  "tiles": 4,
+  "bridge_k": 1,
+  "shared": false,
+  "rank": 32,
+  "alpha": 32,
+  "learning_rate": 2e-05,
+  "warmup_updates": 100,
+  "global_batch": 64,
+  "epochs": 1,
+  "steps": 28,
+  "guidance": 7.5
+}

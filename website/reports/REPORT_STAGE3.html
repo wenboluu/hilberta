@@ -1,0 +1,1698 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>REPORT STAGE3 · HilbertA</title><link rel="stylesheet" href="../assets/style.css"><style>main{max-width:1400px;padding:40px 24px}h1{font-size:34px;letter-spacing:-1px;margin:30px 0}h2{font-size:26px;margin:40px 0 16px}h3{margin:24px 0 12px}p,ul{margin:16px 0}table{display:block;overflow:auto;max-width:100%;font-size:12px}pre{overflow:auto;padding:20px;background:#eef2e8}td,th{white-space:normal;min-width:100px}a{color:var(--accent)}</style><main><a href="../index.html">← HilbertA project page</a><p>Archived measured results · source commit f9ab0b2 · <a href="REPORT_STAGE3.md">Download Markdown</a></p><h1 id="flux-sparse-attention-stage-3-2048-x-2048-lora-fine-tuning-and-evaluation-full-flux-ours-4-tile-k1-ours-16-tile-k3-clear-local16-spargeattn-topk025">FLUX sparse attention, stage 3: 2048 x 2048 LoRA fine-tuning and evaluation (Full FLUX / ours 4-tile K1 / ours 16-tile K3 / CLEAR local16 / SpargeAttn topk0.25)</h1>
+<p>Every number is <strong>measured</strong> unless a cell says MISSING / n/a; missing inputs are reported, never invented. No plots; image comparisons are HTML pages. 
+Protocol: the same 2,048 COCO val2017 prompts and real-image reference as stage 2; seed-2707 initial latents built at 2048 (<code>initial_latent(seed, device, 2048, 2048)</code>), 28 steps, guidance 7.5, true CFG 1, max_sequence_length 512, cached text embeddings. Competitors are the configurations chosen in stage 2 (no re-screening), run with their official code at 2048.</p>
+<h2 id="0-headline-read-this-first">0. Headline (read this first)</h2>
+<p><strong>Quality at 2048x2048</strong> (2,048 COCO val prompts, 28 steps, guidance 7.5, true CFG 1, seed-2707 initial latents at 2048; FID/KID vs the same real COCO set as stage 2, LPIPS-Alex at512 / PSNR / SSIM paired vs Full FLUX at 2048): (metrics_summary resolution = 2048)</p>
+<table>
+<thead>
+<tr>
+<th>method</th>
+<th style="text-align: right;">FID</th>
+<th style="text-align: right;">KID mean (std)</th>
+<th style="text-align: right;">LPIPS mean</th>
+<th style="text-align: right;">CLIP cos</th>
+<th style="text-align: right;">PSNR dB</th>
+<th style="text-align: right;">SSIM</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Full FLUX</td>
+<td style="text-align: right;">52.40</td>
+<td style="text-align: right;">0.0119 (0.0008)</td>
+<td style="text-align: right;">ref</td>
+<td style="text-align: right;">0.2579</td>
+<td style="text-align: right;">ref</td>
+<td style="text-align: right;">ref</td>
+</tr>
+<tr>
+<td>ours 4-tile K1 (2048 LoRA)</td>
+<td style="text-align: right;">53.17</td>
+<td style="text-align: right;">0.0125 (0.0008)</td>
+<td style="text-align: right;">0.376</td>
+<td style="text-align: right;">0.2592</td>
+<td style="text-align: right;">15.11</td>
+<td style="text-align: right;">0.742</td>
+</tr>
+<tr>
+<td>ours 16-tile K3 (2048 LoRA)</td>
+<td style="text-align: right;">52.54</td>
+<td style="text-align: right;">0.0121 (0.0008)</td>
+<td style="text-align: right;">0.422</td>
+<td style="text-align: right;">0.2601</td>
+<td style="text-align: right;">14.39</td>
+<td style="text-align: right;">0.724</td>
+</tr>
+<tr>
+<td>CLEAR local16 (official)</td>
+<td style="text-align: right;">57.23</td>
+<td style="text-align: right;">0.0092 (0.0005)</td>
+<td style="text-align: right;">0.629</td>
+<td style="text-align: right;">0.2491</td>
+<td style="text-align: right;">11.14</td>
+<td style="text-align: right;">0.595</td>
+</tr>
+<tr>
+<td>SpargeAttn topk0.25 (official, training-free)</td>
+<td style="text-align: right;">54.14</td>
+<td style="text-align: right;">0.0106 (0.0005)</td>
+<td style="text-align: right;">0.542</td>
+<td style="text-align: right;">0.2577</td>
+<td style="text-align: right;">12.33</td>
+<td style="text-align: right;">0.640</td>
+</tr>
+</tbody>
+</table>
+<p>KID std is the spread over 100 subsets, not a confidence interval. CLEAR uses its official 1024-trained checkpoint and SpargeAttn is training-free (both run at 2048 unchanged); ours use LoRAs fine-tuned at 2048 (section 2).</p>
+<p><strong>2048 training runs</strong> (details in section 2):</p>
+<table>
+<thead>
+<tr>
+<th>run</th>
+<th style="text-align: right;">updates done / planned</th>
+<th>micro x world x accum = global batch</th>
+<th style="text-align: right;">lr</th>
+<th style="text-align: right;">warmup</th>
+<th style="text-align: right;">wall (h, sum of update times)</th>
+<th style="text-align: right;">final train MSE</th>
+<th style="text-align: right;">mean MSE last 50</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ours 4-tile K1 @2048 (<code>training_2048_t4k1/</code>)</td>
+<td style="text-align: right;">1792 / 1792</td>
+<td>4 x 8 x 2 = 64</td>
+<td style="text-align: right;">2e-05</td>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">13.91</td>
+<td style="text-align: right;">0.037333</td>
+<td style="text-align: right;">0.035670</td>
+</tr>
+<tr>
+<td>ours 16-tile K3 @2048 (<code>training_2048_t16k3/</code>)</td>
+<td style="text-align: right;">1792 / 1792</td>
+<td>4 x 8 x 2 = 64</td>
+<td style="text-align: right;">2e-05</td>
+<td style="text-align: right;">100</td>
+<td style="text-align: right;">12.27</td>
+<td style="text-align: right;">0.063364</td>
+<td style="text-align: right;">0.056867</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Speed at 2048, batch 1</strong> from <code>kernel_bench/summary.json</code> (stage-2 bench, by reference; no new timing in stage 3); e2e = 28-step pipeline call (VAE excluded), denoiser = one transformer forward; speedup vs Full FLUX at the same point:</p>
+<table>
+<thead>
+<tr>
+<th>method</th>
+<th style="text-align: right;">e2e 2048 b1 (s/image)</th>
+<th style="text-align: right;">denoiser 2048 b1 (ms)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Full FLUX (native flash SDPA)</td>
+<td style="text-align: right;">31.90</td>
+<td style="text-align: right;">1150</td>
+</tr>
+<tr>
+<td>ours 4-tile K1 (paired kernel, merged LoRA)</td>
+<td style="text-align: right;">19.83 (1.61x)</td>
+<td style="text-align: right;">712 (1.61x)</td>
+</tr>
+<tr>
+<td>ours 16-tile K3 (paired kernel, merged LoRA)</td>
+<td style="text-align: right;">17.65 (1.81x)</td>
+<td style="text-align: right;">640 (1.80x)</td>
+</tr>
+<tr>
+<td>CLEAR local16 (official)</td>
+<td style="text-align: right;">21.60 (1.48x)</td>
+<td style="text-align: right;">773 (1.49x)</td>
+</tr>
+<tr>
+<td>SpargeAttn topk0.25 (official)</td>
+<td style="text-align: right;">20.11 (1.59x)</td>
+<td style="text-align: right;">714 (1.61x)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>The stage-2 2048 rows of ours were timed with a merged LoRA in the BF16 weights; merging the 2048-trained adapters gives the same compute, so these rows apply to the stage-3 adapters unchanged (speed is adapter-independent; the quality above is what changed).</li>
+</ul>
+<h2 id="1-environment-commits-and-generation-protocols">1. Environment, commits and generation protocols</h2>
+<ul>
+<li>Stage-3 source commit (<code>source_commit_stage3.txt</code>): <code>45e2bb3 (hilberta branch stage3-2048; pod code tree md5 bcd23f788cdfed1d969503139aba87e1 matches the commit)</code></li>
+<li>Metrics environment: {"python": "3.11.2", "torch": "2.9.1", "torch_fidelity": "0.4.0", "lpips": "0.1.4", "transformers": "4.55.2", "numpy": "1.26.4", "Pillow": "12.3.0", "scipy": "1.17.1", "scikit_image": null}</li>
+<li>Generation protocol <code>clear_local16</code>: resolution [2048, 2048]; backend torch FlexAttention (official processors, torch.compile), shared global block mask; steps 28; guidance 7.5; true_cfg 1.0; batch 1; adapter - (- updates); manifest sha <code>5a2d7bf1f5151a4bc805a1b8000e5041510f29e8ebeab3428fce2994c6222fcc</code></li>
+<li>Generation protocol <code>full_flux</code>: resolution [2048, 2048]; backend full_native_flash; steps 28; guidance 7.5; true_cfg 1.0; batch 1; adapter - (- updates); manifest sha <code>5a2d7bf1f5151a4bc805a1b8000e5041510f29e8ebeab3428fce2994c6222fcc</code></li>
+<li>Generation protocol <code>ours16tile_2048</code>: resolution 2048; backend paired; steps 28; guidance 7.5; true_cfg 1.0; batch 1; adapter d2d6acb2ccb3e4a527ba02e001cbede66d0b1df9be9a2429228717fec3543b27 (1792 updates); manifest sha <code>5a2d7bf1f5151a4bc805a1b8000e5041510f29e8ebeab3428fce2994c6222fcc</code></li>
+<li>Generation protocol <code>ours4tile_2048</code>: resolution 2048; backend paired; steps 28; guidance 7.5; true_cfg 1.0; batch 1; adapter 27cd7d53d07720309af27658be9e2c9acd5a2d4b8a50d23f0581a34a7d798a41 (1792 updates); manifest sha <code>5a2d7bf1f5151a4bc805a1b8000e5041510f29e8ebeab3428fce2994c6222fcc</code></li>
+<li>Generation protocol <code>sparge_topk0.25</code>: resolution [2048, 2048]; backend spas_sage2_attn_meansim_topk_cuda; steps 28; guidance 7.5; true_cfg 1.0; batch 1; adapter - (- updates); manifest sha <code>5a2d7bf1f5151a4bc805a1b8000e5041510f29e8ebeab3428fce2994c6222fcc</code></li>
+</ul>
+<h2 id="2-training-at-2048-actual-batch-updates-wall-time-final-mse">2. Training at 2048 (actual batch / updates / wall time / final MSE)</h2>
+<h3 id="run-c-4-tile-k1-at-2048-training_2048_t4k1">Run C: 4-tile K1 at 2048 (<code>training_2048_t4k1/</code>)</h3>
+<ul>
+<li>Resolution 2048 (grid 128); topology t4k1: tiles 4, bridge block64_k1_reciprocal (K=1); backend FlexAttention64 packed QKV</li>
+<li>Initialisation / adapter / optimizer state: initialization = <code>original FLUX plus LoRA loaded from /tmp/formal/flux/experiment/training/checkpoints/adapter_step001792.pt (1024 t4k1 adapter, 1792 updates); fresh AdamW state, fresh warmup/LR schedule, update counter 0</code>; optimizer_reset = <code>True</code></li>
+<li>Optimizer adamw betas(.9,.999) eps1e-8 wd1e-4; lr 2e-05 (as specified); warmup 100 (as specified); constant after warmup; grad clip 1.0; precision BF16 base, FP32 LoRA</li>
+<li><strong>Actual batch:</strong> microbatch 4 x 8 ranks x accum 2 = global batch 64 (config: 4 x 8 x 2 = 64); planned updates 1792 over 114688 records</li>
+<li>complete.json: {"complete": true, "completed_updates": 1792, "processed_records": 114688, "records": 114688}</li>
+<li>metrics.jsonl: <strong>1792 updates done</strong> (1792 rows); wall 13.91 h (sum of update_seconds); train MSE first 0.117443 -&gt; final 0.037333 (mean of the last 50 updates 0.035670)</li>
+<li><strong>Final checkpoint:</strong> <code>training_2048_t4k1/checkpoints/adapter_step001792.pt</code></li>
+</ul>
+<h3 id="run-d-16-tile-k3-at-2048-training_2048_t16k3">Run D: 16-tile K3 at 2048 (<code>training_2048_t16k3/</code>)</h3>
+<ul>
+<li>Resolution 2048 (grid 128); topology t16k3: tiles 16, bridge block64_k3_reciprocal (K=3); backend FlexAttention64 packed QKV</li>
+<li>Initialisation / adapter / optimizer state: initialization = <code>original FLUX plus LoRA loaded from /tmp/formal/flux/experiment/training_16tile_k3/checkpoints/adapter_step001792.pt (1024 t16k3 adapter, 1792 updates); fresh AdamW state, fresh warmup/LR schedule, update counter 0</code>; optimizer_reset = <code>True</code></li>
+<li>Optimizer adamw betas(.9,.999) eps1e-8 wd1e-4; lr 2e-05 (as specified); warmup 100 (as specified); constant after warmup; grad clip 1.0; precision BF16 base, FP32 LoRA</li>
+<li><strong>Actual batch:</strong> microbatch 4 x 8 ranks x accum 2 = global batch 64 (config: 4 x 8 x 2 = 64); planned updates 1792 over 114688 records</li>
+<li>complete.json: {"complete": true, "completed_updates": 1792, "processed_records": 114688, "records": 114688}</li>
+<li>metrics.jsonl: <strong>1792 updates done</strong> (1792 rows); wall 12.27 h (sum of update_seconds); train MSE first 0.162146 -&gt; final 0.063364 (mean of the last 50 updates 0.056867)</li>
+<li><strong>Final checkpoint:</strong> <code>training_2048_t16k3/checkpoints/adapter_step001792.pt</code></li>
+</ul>
+<p>Specified for both runs: initialise from the corresponding 1024 adapter, lr 2e-5, warmup 100, fresh optimizer state (no 1024 optimizer moments). The values above are what the run directories record; any difference is flagged.</p>
+<h2 id="3-quality-at-2048-2048-coco-val-prompts-matched-initial-latents">3. Quality at 2048 (2,048 COCO val prompts, matched initial latents)</h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>What it is</th>
+<th style="text-align: right;">FID (aux.)</th>
+<th style="text-align: right;">KID mean +- std</th>
+<th style="text-align: right;">LPIPS mean / median / p90</th>
+<th style="text-align: right;">CLIP cos</th>
+<th style="text-align: right;">PSNR mean / median (dB)</th>
+<th style="text-align: right;">PSNR inf</th>
+<th style="text-align: right;">SSIM mean / median</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Full FLUX</td>
+<td>native flash SDPA full attention, no LoRA (baseline; official PyTorch/diffusers kernel)</td>
+<td style="text-align: right;">52.398</td>
+<td style="text-align: right;">0.011882 +- 0.000784</td>
+<td style="text-align: right;">reference</td>
+<td style="text-align: right;">0.2579</td>
+<td style="text-align: right;">reference</td>
+<td style="text-align: right;">reference</td>
+<td style="text-align: right;">reference</td>
+</tr>
+<tr>
+<td>clear_local16</td>
+<td>CLEAR official code + official checkpoint, config local16  (<strong>competitor official kernel/path</strong>)</td>
+<td style="text-align: right;">57.229</td>
+<td style="text-align: right;">0.009243 +- 0.000488</td>
+<td style="text-align: right;">0.6291 / 0.6391 / 0.7135</td>
+<td style="text-align: right;">0.2491</td>
+<td style="text-align: right;">11.14 / 10.93</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0.5953 / 0.5945</td>
+</tr>
+<tr>
+<td>ours16tile_2048</td>
+<td>16-tile K3 reciprocal, LoRA r32 fine-tuned at 2048 (our method; generation backend as recorded in its protocol.json, section 1)</td>
+<td style="text-align: right;">52.536</td>
+<td style="text-align: right;">0.012077 +- 0.000836</td>
+<td style="text-align: right;">0.4221 / 0.4225 / 0.5832</td>
+<td style="text-align: right;">0.2601</td>
+<td style="text-align: right;">14.39 / 14.07</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0.7238 / 0.7306</td>
+</tr>
+<tr>
+<td>ours4tile_2048</td>
+<td>4-tile K1 reciprocal, LoRA r32 fine-tuned at 2048 (our method; generation backend as recorded in its protocol.json, section 1)</td>
+<td style="text-align: right;">53.167</td>
+<td style="text-align: right;">0.012454 +- 0.000801</td>
+<td style="text-align: right;">0.3759 / 0.3697 / 0.5481</td>
+<td style="text-align: right;">0.2592</td>
+<td style="text-align: right;">15.11 / 14.74</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0.7419 / 0.7497</td>
+</tr>
+<tr>
+<td>sparge_topk0.25</td>
+<td>SpargeAttn training-free spas_sage2_attn_meansim_topk_cuda, config topk0.25  (<strong>competitor official kernel</strong>)</td>
+<td style="text-align: right;">54.141</td>
+<td style="text-align: right;">0.010551 +- 0.000505</td>
+<td style="text-align: right;">0.5418 / 0.5491 / 0.7081</td>
+<td style="text-align: right;">0.2577</td>
+<td style="text-align: right;">12.33 / 12.11</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0.6401 / 0.6458</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>metrics_summary resolution: 2048; eval root <code>/tmp/formal/flux/experiment/evaluation_2048</code>; real reference <code>/tmp/formal/flux/experiment/evaluation/coco_real</code> (same COCO photos and cached Inception features as stage 2, sha-verified).</li>
+<li>FID/KID vs real COCO: torch-fidelity 0.4.0, torch-fidelity inception-v3-compat 2048 pool; KID 100 x 1000, seed 2707, raw KID; KID std is the spread over subsets, not a CI. Real half-vs-half FID 58.171 (n=1024). Inception resizes every image to 299, so 2048 and 1024 numbers use the same feature space but are different generated sets.</li>
+<li>LPIPS: {"metric": "LPIPS-Alex at512", "resize": "bilinear antialias 2048-&gt;512 on [-1,1] float", "implementation": {"package": "lpips", "version": "0.1.4", "net": "alex", "lpips_version": "0.1", "torch": "2.9.1"}}; CLIP: {"metric": "CLIP cosine", "model": "openai/clip-vit-large-patch14", "revision": "32bd64288804d66eefd0ccbe215aa642df71cc41", "transformers": "4.55.2", "note": "L2-normalised image/text embeddings, mean cosine, no scaling (not CLIPScore x100 / x2.5)"}; COCO real CLIP 0.2568.</li>
+<li>PSNR/SSIM vs Full FLUX on the 2048 originals: PNG -&gt; uint8 RGB -&gt; float32 / 255 in [0,1]; no resize; implementation {"code": "experiments/coco1024/metrics.py ssim()/psnr() (torch)", "torch": "2.9.1", "numpy": "1.26.4", "Pillow": "12.3.0", "device": "cuda:0", "crosscheck": "scikit-image not installed in this environment; only our torch implementation was used"}.</li>
+<li>
+<p>Per-image values: <code>evaluation_2048/metrics_stage3/per_image_metrics.jsonl</code>. Missing metric blocks: none.</p>
+</li>
+<li>
+<p>64-sample comparison page: <code>evaluation_2048/comparisons/index_stage3.html</code> (present), same frozen subset as stage 1/2.</p>
+</li>
+</ul>
+<h2 id="4-direct-cross-resolution-before-2048-training-evaluation_2048crossres_pre">4. Direct cross-resolution before 2048 training (<code>evaluation_2048/crossres_pre/</code>)</h2>
+<p>The 10 frozen showcase prompts generated at 2048 by every method <strong>before</strong> any 2048 training: ours with the 1024 adapters, CLEAR with its official checkpoint, SpargeAttn training-free. Visual only (no metrics, n=10).</p>
+<table>
+<thead>
+<tr>
+<th>method dir</th>
+<th style="text-align: right;">images</th>
+<th>resolution</th>
+<th>adapter / config</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clear_local16</code></td>
+<td style="text-align: right;">10/10</td>
+<td>[2048, 2048]</td>
+<td>local16</td>
+</tr>
+<tr>
+<td><code>full_flux</code></td>
+<td style="text-align: right;">10/10</td>
+<td>[2048, 2048]</td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>ours16tile_1024lora</code></td>
+<td style="text-align: right;">10/10</td>
+<td>2048</td>
+<td>/tmp/formal/flux/experiment/training_16tile_k3/checkpoints/adapter_step001792.pt</td>
+</tr>
+<tr>
+<td><code>ours4tile_1024lora</code></td>
+<td style="text-align: right;">10/10</td>
+<td>2048</td>
+<td>/tmp/formal/flux/experiment/training/checkpoints/adapter_step001792.pt</td>
+</tr>
+<tr>
+<td><code>sparge_topk0.25</code></td>
+<td style="text-align: right;">10/10</td>
+<td>[2048, 2048]</td>
+<td>0.25</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Page: <code>evaluation_2048/showcase10/crossres_pre.html</code> (present).</li>
+</ul>
+<h2 id="5-speed-at-2048">5. Speed at 2048</h2>
+<p>No new timing in stage 3 (<code>kernel_bench_2048/</code> absent). The 2048 rows of the stage-2 bench (<code>kernel_bench/summary.json</code>, same H100 harness; ours with merged LoRA, whose cost does not depend on the adapter values) apply unchanged; see <code>report_stage2.md</code> section 4 for the full table. Rows at 2048:</p>
+<table>
+<thead>
+<tr>
+<th>stage</th>
+<th>backend</th>
+<th>topology</th>
+<th>batch</th>
+<th>phase</th>
+<th>median_ms</th>
+<th>p10_ms</th>
+<th>p90_ms</th>
+<th>speedup_vs_full_native_flash</th>
+<th>peak_allocated_gib</th>
+<th>status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>1</td>
+<td>weighted</td>
+<td>3.259</td>
+<td>3.215</td>
+<td>3.330</td>
+<td>3.127</td>
+<td>4.817</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>1</td>
+<td>weighted</td>
+<td>1.771</td>
+<td>1.766</td>
+<td>1.778</td>
+<td>5.755</td>
+<td>4.817</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>1</td>
+<td>weighted</td>
+<td>2.474</td>
+<td>2.449</td>
+<td>2.528</td>
+<td>4.120</td>
+<td>0.483</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>1</td>
+<td>weighted</td>
+<td>1.164</td>
+<td>1.158</td>
+<td>1.248</td>
+<td>8.753</td>
+<td>0.483</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>2</td>
+<td>weighted</td>
+<td>7.003</td>
+<td>6.901</td>
+<td>7.170</td>
+<td>2.996</td>
+<td>5.104</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>2</td>
+<td>weighted</td>
+<td>3.933</td>
+<td>3.922</td>
+<td>3.948</td>
+<td>5.335</td>
+<td>5.104</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>2</td>
+<td>weighted</td>
+<td>4.965</td>
+<td>4.921</td>
+<td>5.042</td>
+<td>4.225</td>
+<td>0.960</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>2</td>
+<td>weighted</td>
+<td>2.372</td>
+<td>2.336</td>
+<td>2.459</td>
+<td>8.844</td>
+<td>0.960</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>4</td>
+<td>weighted</td>
+<td>14.095</td>
+<td>13.887</td>
+<td>14.381</td>
+<td>2.967</td>
+<td>5.684</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>4</td>
+<td>weighted</td>
+<td>7.692</td>
+<td>7.660</td>
+<td>7.855</td>
+<td>5.437</td>
+<td>5.684</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>4</td>
+<td>weighted</td>
+<td>9.662</td>
+<td>9.553</td>
+<td>9.769</td>
+<td>4.328</td>
+<td>1.919</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>4</td>
+<td>weighted</td>
+<td>4.520</td>
+<td>4.462</td>
+<td>4.581</td>
+<td>9.252</td>
+<td>1.919</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t4k1</td>
+<td>8</td>
+<td>weighted</td>
+<td>28.117</td>
+<td>27.697</td>
+<td>28.494</td>
+<td>2.867</td>
+<td>6.966</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>flex64_per_call</td>
+<td>t16k3</td>
+<td>8</td>
+<td>weighted</td>
+<td>15.225</td>
+<td>15.100</td>
+<td>15.558</td>
+<td>5.295</td>
+<td>6.966</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t4k1</td>
+<td>8</td>
+<td>weighted</td>
+<td>19.167</td>
+<td>19.039</td>
+<td>19.229</td>
+<td>4.206</td>
+<td>3.837</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>attention</td>
+<td>persistent_paired</td>
+<td>t16k3</td>
+<td>8</td>
+<td>weighted</td>
+<td>8.905</td>
+<td>8.821</td>
+<td>9.030</td>
+<td>9.053</td>
+<td>3.836</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>1</td>
+<td>None</td>
+<td>772.875</td>
+<td>771.443</td>
+<td>775.548</td>
+<td>1.488</td>
+<td>25.516</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16_superseded</td>
+<td>None</td>
+<td>1</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td>None</td>
+<td>oom</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1</td>
+<td>None</td>
+<td>1150.413</td>
+<td>1145.047</td>
+<td>1155.002</td>
+<td>1.000</td>
+<td>23.871</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>1</td>
+<td>None</td>
+<td>639.542</td>
+<td>632.565</td>
+<td>642.296</td>
+<td>1.799</td>
+<td>23.873</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>1</td>
+<td>None</td>
+<td>712.444</td>
+<td>707.665</td>
+<td>714.404</td>
+<td>1.615</td>
+<td>23.874</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>1</td>
+<td>None</td>
+<td>713.819</td>
+<td>713.425</td>
+<td>714.199</td>
+<td>1.612</td>
+<td>23.870</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>2</td>
+<td>None</td>
+<td>1556.672</td>
+<td>1552.541</td>
+<td>1562.275</td>
+<td>1.478</td>
+<td>25.522</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16_superseded</td>
+<td>None</td>
+<td>2</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td>None</td>
+<td>skipped_after_oom</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2</td>
+<td>None</td>
+<td>2300.399</td>
+<td>2299.201</td>
+<td>2303.612</td>
+<td>1.000</td>
+<td>25.519</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>2</td>
+<td>None</td>
+<td>1285.050</td>
+<td>1281.888</td>
+<td>1287.299</td>
+<td>1.790</td>
+<td>25.524</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>2</td>
+<td>None</td>
+<td>1434.425</td>
+<td>1430.916</td>
+<td>1437.572</td>
+<td>1.604</td>
+<td>25.524</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>2</td>
+<td>None</td>
+<td>1429.849</td>
+<td>1427.311</td>
+<td>1431.474</td>
+<td>1.609</td>
+<td>25.521</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>4</td>
+<td>None</td>
+<td>3152.136</td>
+<td>3144.994</td>
+<td>3156.011</td>
+<td>1.466</td>
+<td>28.820</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16_superseded</td>
+<td>None</td>
+<td>4</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td>None</td>
+<td>skipped_after_oom</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>4</td>
+<td>None</td>
+<td>4619.669</td>
+<td>4618.781</td>
+<td>4621.105</td>
+<td>1.000</td>
+<td>28.818</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>4</td>
+<td>None</td>
+<td>2561.972</td>
+<td>2553.401</td>
+<td>2564.130</td>
+<td>1.803</td>
+<td>28.827</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>4</td>
+<td>None</td>
+<td>2854.865</td>
+<td>2847.361</td>
+<td>2857.177</td>
+<td>1.618</td>
+<td>28.827</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>4</td>
+<td>None</td>
+<td>2879.280</td>
+<td>2866.667</td>
+<td>2891.285</td>
+<td>1.604</td>
+<td>28.819</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>8</td>
+<td>None</td>
+<td>6323.836</td>
+<td>6315.673</td>
+<td>6338.291</td>
+<td>1.473</td>
+<td>35.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>clear_local16_superseded</td>
+<td>None</td>
+<td>8</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td>None</td>
+<td></td>
+<td>None</td>
+<td>skipped_after_oom</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>8</td>
+<td>None</td>
+<td>9314.813</td>
+<td>9305.657</td>
+<td>9329.762</td>
+<td>1.000</td>
+<td>35.416</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t16k3</td>
+<td>t16k3</td>
+<td>8</td>
+<td>None</td>
+<td>5118.901</td>
+<td>5113.201</td>
+<td>5124.867</td>
+<td>1.820</td>
+<td>35.432</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>paired_t4k1</td>
+<td>t4k1</td>
+<td>8</td>
+<td>None</td>
+<td>5739.725</td>
+<td>5717.669</td>
+<td>5741.940</td>
+<td>1.623</td>
+<td>35.433</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>denoiser</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>8</td>
+<td>None</td>
+<td>5783.090</td>
+<td>5776.102</td>
+<td>5801.874</td>
+<td>1.611</td>
+<td>35.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>1</td>
+<td>None</td>
+<td>21597.354</td>
+<td>21541.611</td>
+<td>21597.354</td>
+<td>1.477</td>
+<td>24.038</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1</td>
+<td>None</td>
+<td>31901.742</td>
+<td>31880.961</td>
+<td>31901.742</td>
+<td>1.000</td>
+<td>24.038</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>1</td>
+<td>None</td>
+<td>17645.447</td>
+<td>17643.211</td>
+<td>17645.447</td>
+<td>1.808</td>
+<td>24.039</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>1</td>
+<td>None</td>
+<td>19826.000</td>
+<td>19807.842</td>
+<td>19826.000</td>
+<td>1.609</td>
+<td>24.039</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>1</td>
+<td>None</td>
+<td>20114.354</td>
+<td>20092.668</td>
+<td>20114.354</td>
+<td>1.586</td>
+<td>24.038</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>2</td>
+<td>None</td>
+<td>43445.613</td>
+<td>43363.977</td>
+<td>43445.613</td>
+<td>1.469</td>
+<td>25.690</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2</td>
+<td>None</td>
+<td>63833.473</td>
+<td>63826.379</td>
+<td>63833.473</td>
+<td>1.000</td>
+<td>25.690</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>2</td>
+<td>None</td>
+<td>35314.895</td>
+<td>35243.992</td>
+<td>35314.895</td>
+<td>1.808</td>
+<td>25.690</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>2</td>
+<td>None</td>
+<td>39555.258</td>
+<td>39421.258</td>
+<td>39555.258</td>
+<td>1.614</td>
+<td>25.691</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>2</td>
+<td>None</td>
+<td>40361.852</td>
+<td>40308.285</td>
+<td>40361.852</td>
+<td>1.582</td>
+<td>25.690</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>4</td>
+<td>None</td>
+<td>87651.516</td>
+<td>87576.477</td>
+<td>87651.516</td>
+<td>1.456</td>
+<td>29.001</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>4</td>
+<td>None</td>
+<td>127582.055</td>
+<td>127551.891</td>
+<td>127582.055</td>
+<td>1.000</td>
+<td>29.000</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>4</td>
+<td>None</td>
+<td>70068.023</td>
+<td>69990.281</td>
+<td>70068.023</td>
+<td>1.821</td>
+<td>29.001</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>4</td>
+<td>None</td>
+<td>78292.688</td>
+<td>78238.625</td>
+<td>78292.688</td>
+<td>1.630</td>
+<td>29.001</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>4</td>
+<td>None</td>
+<td>81195.219</td>
+<td>80869.984</td>
+<td>81195.219</td>
+<td>1.571</td>
+<td>29.001</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>clear_local16</td>
+<td>None</td>
+<td>8</td>
+<td>None</td>
+<td>174774.594</td>
+<td>174052.438</td>
+<td>174774.594</td>
+<td>1.450</td>
+<td>35.622</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>8</td>
+<td>None</td>
+<td>253499.250</td>
+<td>253292.297</td>
+<td>253499.250</td>
+<td>1.000</td>
+<td>35.621</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t16k3</td>
+<td>t16k3</td>
+<td>8</td>
+<td>None</td>
+<td>139190.484</td>
+<td>139098.406</td>
+<td>139190.484</td>
+<td>1.821</td>
+<td>35.622</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>ours_t4k1</td>
+<td>t4k1</td>
+<td>8</td>
+<td>None</td>
+<td>156787.891</td>
+<td>156487.078</td>
+<td>156787.891</td>
+<td>1.617</td>
+<td>35.622</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>generation</td>
+<td>sparge_topk0.25</td>
+<td>None</td>
+<td>8</td>
+<td>None</td>
+<td>164232.391</td>
+<td>164158.844</td>
+<td>164232.391</td>
+<td>1.544</td>
+<td>35.621</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>1</td>
+<td>weighted</td>
+<td>10.192</td>
+<td>9.926</td>
+<td>10.466</td>
+<td>1.000</td>
+<td>0.393</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1</td>
+<td>0</td>
+<td>1.168</td>
+<td>1.149</td>
+<td>1.184</td>
+<td></td>
+<td>0.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1</td>
+<td>0</td>
+<td>2.453</td>
+<td>2.395</td>
+<td>2.508</td>
+<td></td>
+<td>0.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1</td>
+<td>1</td>
+<td>1.161</td>
+<td>1.159</td>
+<td>1.209</td>
+<td></td>
+<td>0.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1</td>
+<td>1</td>
+<td>2.464</td>
+<td>2.408</td>
+<td>2.505</td>
+<td></td>
+<td>0.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1</td>
+<td>2</td>
+<td>1.173</td>
+<td>1.154</td>
+<td>1.192</td>
+<td></td>
+<td>0.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1</td>
+<td>2</td>
+<td>2.467</td>
+<td>2.409</td>
+<td>2.527</td>
+<td></td>
+<td>0.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1</td>
+<td>3</td>
+<td>1.161</td>
+<td>1.159</td>
+<td>1.219</td>
+<td></td>
+<td>0.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1</td>
+<td>3</td>
+<td>2.473</td>
+<td>2.413</td>
+<td>2.512</td>
+<td></td>
+<td>0.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>1</td>
+<td>weighted</td>
+<td>1.169</td>
+<td>1.155</td>
+<td>1.197</td>
+<td>8.715</td>
+<td>0.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>1</td>
+<td>weighted</td>
+<td>2.463</td>
+<td>2.415</td>
+<td>2.507</td>
+<td>4.138</td>
+<td>0.418</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>2</td>
+<td>weighted</td>
+<td>20.979</td>
+<td>20.668</td>
+<td>21.723</td>
+<td>1.000</td>
+<td>0.777</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2</td>
+<td>0</td>
+<td>2.392</td>
+<td>2.339</td>
+<td>2.478</td>
+<td></td>
+<td>0.780</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2</td>
+<td>0</td>
+<td>5.073</td>
+<td>4.958</td>
+<td>5.288</td>
+<td></td>
+<td>0.780</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2</td>
+<td>1</td>
+<td>2.429</td>
+<td>2.338</td>
+<td>2.472</td>
+<td></td>
+<td>0.780</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2</td>
+<td>1</td>
+<td>5.096</td>
+<td>5.052</td>
+<td>5.104</td>
+<td></td>
+<td>0.780</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2</td>
+<td>2</td>
+<td>2.422</td>
+<td>2.328</td>
+<td>2.461</td>
+<td></td>
+<td>0.780</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2</td>
+<td>2</td>
+<td>5.093</td>
+<td>4.913</td>
+<td>5.243</td>
+<td></td>
+<td>0.780</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2</td>
+<td>3</td>
+<td>2.429</td>
+<td>2.320</td>
+<td>2.455</td>
+<td></td>
+<td>0.780</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2</td>
+<td>3</td>
+<td>5.095</td>
+<td>5.028</td>
+<td>5.193</td>
+<td></td>
+<td>0.780</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>2</td>
+<td>weighted</td>
+<td>2.419</td>
+<td>2.335</td>
+<td>2.459</td>
+<td>8.673</td>
+<td>0.780</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>2</td>
+<td>weighted</td>
+<td>5.090</td>
+<td>5.032</td>
+<td>5.175</td>
+<td>4.122</td>
+<td>0.780</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>4</td>
+<td>weighted</td>
+<td>41.819</td>
+<td>40.619</td>
+<td>43.042</td>
+<td>1.000</td>
+<td>1.553</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>4</td>
+<td>0</td>
+<td>4.482</td>
+<td>4.407</td>
+<td>4.655</td>
+<td></td>
+<td>1.559</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>4</td>
+<td>0</td>
+<td>9.804</td>
+<td>9.687</td>
+<td>10.183</td>
+<td></td>
+<td>1.559</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>4</td>
+<td>1</td>
+<td>4.525</td>
+<td>4.449</td>
+<td>4.670</td>
+<td></td>
+<td>1.559</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>4</td>
+<td>1</td>
+<td>9.773</td>
+<td>9.516</td>
+<td>10.148</td>
+<td></td>
+<td>1.559</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>4</td>
+<td>2</td>
+<td>4.502</td>
+<td>4.424</td>
+<td>4.583</td>
+<td></td>
+<td>1.559</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>4</td>
+<td>2</td>
+<td>9.753</td>
+<td>9.678</td>
+<td>10.082</td>
+<td></td>
+<td>1.559</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>4</td>
+<td>3</td>
+<td>4.547</td>
+<td>4.447</td>
+<td>4.641</td>
+<td></td>
+<td>1.559</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>4</td>
+<td>3</td>
+<td>9.785</td>
+<td>9.701</td>
+<td>10.041</td>
+<td></td>
+<td>1.559</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>4</td>
+<td>weighted</td>
+<td>4.514</td>
+<td>4.434</td>
+<td>4.626</td>
+<td>9.265</td>
+<td>1.559</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>4</td>
+<td>weighted</td>
+<td>9.795</td>
+<td>9.646</td>
+<td>10.115</td>
+<td>4.270</td>
+<td>1.559</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>full_native_flash</td>
+<td>None</td>
+<td>8</td>
+<td>weighted</td>
+<td>80.617</td>
+<td>80.291</td>
+<td>82.020</td>
+<td>1.000</td>
+<td>3.106</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>8</td>
+<td>0</td>
+<td>8.733</td>
+<td>8.658</td>
+<td>8.882</td>
+<td></td>
+<td>3.118</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>8</td>
+<td>0</td>
+<td>18.957</td>
+<td>18.835</td>
+<td>19.058</td>
+<td></td>
+<td>3.118</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>8</td>
+<td>1</td>
+<td>8.817</td>
+<td>8.795</td>
+<td>8.898</td>
+<td></td>
+<td>3.118</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>8</td>
+<td>1</td>
+<td>18.972</td>
+<td>18.888</td>
+<td>19.055</td>
+<td></td>
+<td>3.118</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>8</td>
+<td>2</td>
+<td>8.777</td>
+<td>8.697</td>
+<td>8.919</td>
+<td></td>
+<td>3.118</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>8</td>
+<td>2</td>
+<td>18.921</td>
+<td>18.767</td>
+<td>18.993</td>
+<td></td>
+<td>3.118</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>8</td>
+<td>3</td>
+<td>8.815</td>
+<td>8.744</td>
+<td>8.989</td>
+<td></td>
+<td>3.118</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>8</td>
+<td>3</td>
+<td>18.980</td>
+<td>18.874</td>
+<td>19.046</td>
+<td></td>
+<td>3.118</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t16k3</td>
+<td>8</td>
+<td>weighted</td>
+<td>8.784</td>
+<td>8.749</td>
+<td>8.883</td>
+<td>9.177</td>
+<td>3.118</td>
+<td>ok</td>
+</tr>
+<tr>
+<td>kernel</td>
+<td>paired</td>
+<td>t4k1</td>
+<td>8</td>
+<td>weighted</td>
+<td>18.958</td>
+<td>18.849</td>
+<td>19.031</td>
+<td>4.253</td>
+<td>3.118</td>
+<td>ok</td>
+</tr>
+</tbody>
+</table>
+<h2 id="6-showcase-at-2048-evaluation_2048showcase10indexhtml">6. Showcase at 2048 (<code>evaluation_2048/showcase10/index.html</code>)</h2>
+<ul>
+<li>Frozen stage-2 selection reused (<code>evaluation/showcase10/selection.json</code>, seed 2707, 10 prompts; not reselected). Columns: COCO real | Full FLUX | ours4tile_2048 | ours16tile_2048 | CLEAR | Sparge.</li>
+<li>Page present; column availability: coco_real=10/10, full_flux=10/10, ours4tile_2048=10/10, ours16tile_2048=10/10, clear_local16=10/10, sparge_topk0.25=10/10</li>
+</ul>
+<h2 id="7-reproduction-commands-pod-source-tmpformalfluxenvsh">7. Reproduction commands (pod; <code>source /tmp/formal/flux/env.sh</code>)</h2>
+<pre><code class="language-bash">bash experiments/competitors/t2048_competitors.sh crossres 6 7          # CLEAR / Sparge on the 10 showcase prompts at 2048 (pre-training cross-res set)
+bash experiments/competitors/t2048_competitors.sh eval 0 1 2 3 4 5 6 7  # CLEAR local16 + Sparge topk0.25, 2048 prompts at 2048, 8 shards
+bash experiments/coco1024/scripts/stage3_eval.sh --gpus 0,1            # metrics (2 GPUs) + showcase + crossres page + compare page + this report + HDFS mirror
+python -m experiments.coco1024.metrics --exp $EXP --eval-root $EXP/evaluation_2048 --resolution 2048 --out metrics_stage3 --methods auto --stage all --inception-weights $F/weights/weights-inception-2015-12-05-6726825d.pth
+python -m experiments.coco1024.report --exp $EXP --stage3
+</code></pre>
+<h2 id="8-explicit-status-list">8. Explicit status list</h2>
+<ul>
+<li>Methods evaluated at 2048: full_flux, clear_local16, ours16tile_2048, ours4tile_2048, sparge_topk0.25; expected full_flux, ours4tile_2048, ours16tile_2048, clear_local16, sparge_topk0.25; missing: none</li>
+<li>Training runs: training_2048_t4k1: complete, training_2048_t16k3: complete</li>
+<li>CLEAR at 4096 is not attempted (its official mask build OOMs, stage 2). Literature numbers are not placed next to measured ones.</li>
+</ul></main></html>

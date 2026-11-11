@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "hilberta"
+version = "0.1.0"
+description = "Composite Hilbert sparse attention for FLUX"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.9,<2.10", "triton==3.5.0; platform_system == 'Linux'", "diffusers==0.36.0", "transformers==4.55.2", "peft==0.17.1", "accelerate>=1.10", "safetensors>=0.6", "sentencepiece", "protobuf", "Pillow", "numpy<2"]
+[project.optional-dependencies]
+test = ["pytest"]
+dev = ["pytest", "ruff==0.15.1"]
+eval = ["torchvision==0.24.0", "torch-fidelity==0.4.0", "lpips==0.1.4"]
+[tool.setuptools.packages.find]
+include = ["hilberta*"]
+[tool.setuptools.package-data]
+hilberta = ["lora_targets.json"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E9", "F"]
