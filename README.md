@@ -1,12 +1,32 @@
-# HilbertA
+<h1 align="center">HilbertA</h1>
+<p align="center">
+  <strong>Hilbert-Curve–Aligned Sparse Attention for 2D Structured Data</strong><br>
+  Shaoyi Zheng · Wenbo Lu · Yuxuan Xia · Shenji Wan<br>
+  <em>ICML 2026</em>
+</p>
 
-Composite Hilbert ordering, sliding tiles, and reciprocal block bridges for sparse attention in FLUX.1-dev.
+<p align="center">
+  <a href="https://wenboluu.github.io/hilberta/"><img alt="Project page and results" src="https://img.shields.io/badge/Project-Page-426488?style=flat-square&amp;logo=githubpages"></a>
+  <a href="https://proceedings.mlr.press/v306/zheng26m.html"><img alt="ICML 2026 paper (PMLR)" src="https://img.shields.io/badge/Paper-ICML%202026-335C67?style=flat-square"></a>
+  <a href="https://arxiv.org/abs/2509.26538"><img alt="arXiv: earlier diffusion preprint" src="https://img.shields.io/badge/arXiv-Earlier%20Preprint-B31B1B?style=flat-square&amp;logo=arxiv"></a>
+  <a href="https://huggingface.co/black-forest-labs/FLUX.1-dev"><img alt="Hugging Face: FLUX.1-dev base model" src="https://img.shields.io/badge/Hugging%20Face-FLUX.1--dev%20Base-FFD21E?style=flat-square&amp;logo=huggingface&amp;logoColor=black"></a>
+  <a href="#citation"><img alt="Copy the BibTeX citation" src="https://img.shields.io/badge/Cite-BibTeX-59636E?style=flat-square"></a>
+</p>
 
-[Paper](https://openreview.net/forum?id=yhMt5V4FNb) · [Project page & results](https://wenboluu.github.io/hilberta/) · [Reproduction guide](docs/REPRODUCE.md) · [Validation status](docs/IMPLEMENTATION.md)
+<p align="center">
+  <a href="https://wenboluu.github.io/hilberta/"><img width="760" src="docs/assets/hilberta-overview.svg" alt="HilbertA maps a 2D grid to a contiguous Hilbert sequence, then applies sliding tiles with reciprocal cross-tile bridges."></a>
+</p>
 
-This release contains the FLUX inference kernels, model integration, LoRA training tools, and evaluation code. It supports 1024 and 2048 image generation; 4096 has performance measurements only. Video experiments are outside this release.
+<p align="center">
+  <a href="#installation">Quick start</a> ·
+  <a href="#reported-results">Benchmarks</a> ·
+  <a href="docs/REPRODUCE.md">Reproduction guide</a> ·
+  <a href="docs/IMPLEMENTATION.md">Validation status</a>
+</p>
 
-**Trained LoRA weights are not yet published on Hugging Face or bundled here.** You can run full-attention generation, untrained sparse smoke tests, or train your own adapter. Reproducing the reported quality requires the matching trained adapter and evaluation manifest; neither is bundled. The portable training/evaluation runners still need production parity checks against the historical runs.
+HilbertA orders neighboring image tokens along a Hilbert curve for contiguous memory access. Sliding tiles and reciprocal block bridges let information travel across tiles. This release includes **FLUX.1-dev** inference kernels, model integration, LoRA training, and evaluation code. It supports 1024 and 2048 image generation; 4096 has performance measurements only. Video experiments are outside this release.
+
+> **Checkpoint status:** The Hugging Face link is the FLUX.1-dev **base model**. HilbertA's trained LoRA adapters are not yet published, and the exact evaluation manifest is not bundled. You can generate with full attention, run an untrained sparse smoke test, or train your own adapter. The portable training and evaluation runners still need parity checks against the historical runs.
 
 ## Which configuration should I use?
 
@@ -104,7 +124,7 @@ The benchmark checks sampled query rows against SDPA before timing. Its resident
 
 At 2048, our LoRAs were adapted at 2048; CLEAR uses its official 1024 checkpoint; SpargeAttn is training-free. Competitor configurations were selected for speed among those tested. These results do not establish superiority on every metric.
 
-The [project page](https://wenboluu.github.io/hilberta/) contains all quality metrics and 1024/2048/4096 scaling results. [Aggregate JSON](results/image_results.json) retains full precision and the [source commit](https://github.com/wenboluu/hilberta-dev/commit/f9ab0b272dd26a005cf9ab8fe6869e24100a0738); [benchmark CSV](results/efficiency_all_rows.csv) contains the detailed timings. These are historical measurements, not a new benchmark of the portable runners.
+The [project page](https://wenboluu.github.io/hilberta/) contains all quality metrics and 1024/2048/4096 scaling results. [Aggregate JSON](results/image_results.json) retains full precision and the [source commit](https://github.com/wenboluu/hilberta-dev/commit/f9ab0b272dd26a005cf9ab8fe6869e24100a0738) (development access required); [benchmark CSV](results/efficiency_all_rows.csv) contains the detailed timings. These are historical measurements, not a new benchmark of the portable runners.
 
 ## Repository layout
 
@@ -120,7 +140,7 @@ The [project page](https://wenboluu.github.io/hilberta/) contains all quality me
 | `results/` | Aggregate measurements; no images or checkpoints |
 | `website/` | Static project page, published results, and archived reports |
 
-This is the public release repository. The initial snapshot was exported from the [development `main` commit](https://github.com/wenboluu/hilberta-dev/commit/c0a337d4845fc0e9704f758f33dd344774930f64). Historical branches and experiments remain in [`hilberta-dev`](https://github.com/wenboluu/hilberta-dev); use this repository's `main` for installation.
+This is the public release repository. The initial snapshot was exported from the [development `main` commit](https://github.com/wenboluu/hilberta-dev/commit/c0a337d4845fc0e9704f758f33dd344774930f64). Historical branches and experiments remain in the private [`hilberta-dev`](https://github.com/wenboluu/hilberta-dev) repository; use this repository's `main` for installation.
 
 ## Development checks
 
@@ -133,6 +153,24 @@ CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=4 python -m pytest tests -q
 
 CPU tests use small models and do not download FLUX. See [CPU-only installation](docs/REPRODUCE.md#cpu-tests). Full-model GPU training capacity, numerical parity, and convergence require separate validation, as listed in [implementation status](docs/IMPLEMENTATION.md).
 
+## Citation
+
+Please cite the [ICML 2026 proceedings paper](https://proceedings.mlr.press/v306/zheng26m.html). See also the [OpenReview record](https://openreview.net/forum?id=yhMt5V4FNb) and the [earlier diffusion preprint](https://arxiv.org/abs/2509.26538).
+
+```bibtex
+@inproceedings{pmlr-v306-zheng26m,
+  title     = {{HilbertA}: {Hilbert-Curve–Aligned} Sparse Attention for {2D} Structured Data},
+  author    = {Zheng, Shaoyi and Lu, Wenbo and Xia, Yuxuan and Wan, Shenji},
+  booktitle = {Proceedings of the 43rd International Conference on Machine Learning},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {306},
+  pages     = {163439--163462},
+  year      = {2026},
+  publisher = {PMLR},
+  url       = {https://proceedings.mlr.press/v306/zheng26m.html}
+}
+```
+
 ## License
 
-Our code is [MIT licensed](LICENSE). FLUX weights, datasets, and dependencies retain their own terms; see [third-party notices](docs/THIRD_PARTY.md). The [paper page](https://openreview.net/forum?id=yhMt5V4FNb) provides publication and citation information.
+Our code is [MIT licensed](LICENSE). FLUX weights, datasets, and dependencies retain their own terms; see [third-party notices](docs/THIRD_PARTY.md).

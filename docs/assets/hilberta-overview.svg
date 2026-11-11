@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="768" height="224" viewBox="0 0 768 224" role="img" aria-labelledby="title desc">
+  <title id="title">HilbertA attention overview</title>
+  <desc id="desc">A raster grid is reordered along a Hilbert curve, then grouped into contiguous tiles. The tiles slide across layers and reciprocal bridges connect blocks across tiles.</desc>
+  <defs>
+    <g id="grid" fill="none" stroke="#c7d7e8" stroke-width="1.5">
+      <rect x="-14" y="-14" width="112" height="112" rx="5" fill="#eef4fa"/>
+      <path d="M14-14V98M42-14V98M70-14V98M-14 14H98M-14 42H98M-14 70H98"/>
+    </g>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0 0 8 4 0 8z" fill="#577697"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="766" height="222" rx="18" fill="#edf3f9" stroke="#cedbea"/>
+  <g fill="#fff" stroke="#d5e0ec">
+    <rect x="14" y="14" width="224" height="196" rx="12"/>
+    <rect x="272" y="14" width="224" height="196" rx="12"/>
+    <rect x="530" y="14" width="224" height="196" rx="12"/>
+  </g>
+  <g stroke="#577697" stroke-width="2" marker-end="url(#arrow)">
+    <path d="M243 112h21"/>
+    <path d="M501 112h21"/>
+  </g>
+  <g font-family="system-ui, -apple-system, sans-serif" text-anchor="middle">
+    <g font-size="19" font-weight="650" fill="#18344f">
+      <text x="126" y="44">2D token grid</text>
+      <text x="384" y="44">Hilbert ordering</text>
+      <text x="642" y="44">Sparse attention</text>
+    </g>
+    <g font-size="15" fill="#445c75">
+      <text x="126" y="193">Spatial neighbors</text>
+      <text x="384" y="193">Contiguous sequence</text>
+      <text x="642" y="193">Sliding tiles + bridges</text>
+    </g>
+  </g>
+  <g transform="translate(84 73)">
+    <use href="#grid"/>
+    <g fill="#7296bb">
+      <circle cx="28" cy="28" r="4"/>
+      <circle cx="56" cy="28" r="4"/>
+      <circle cx="28" cy="56" r="4"/>
+      <circle cx="56" cy="56" r="4"/>
+    </g>
+  </g>
+  <g transform="translate(342 73)">
+    <use href="#grid"/>
+    <path id="hilbert-order" d="M0 84H28V56H0V28V0H28V28H56V0H84V28V56H56V84H84" fill="none" stroke="#3a6d9b" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="0" cy="84" r="4.5" fill="#3a6d9b"/>
+    <circle cx="84" cy="84" r="4.5" fill="#3a6d9b"/>
+  </g>
+  <g stroke-width="1.3">
+    <rect x="550" y="105" width="43" height="32" rx="5" fill="#d9e9fa" stroke="#90b2d5"/>
+    <rect x="597" y="105" width="43" height="32" rx="5" fill="#e8e5fa" stroke="#a9a0d3"/>
+    <rect x="644" y="105" width="43" height="32" rx="5" fill="#d6efe9" stroke="#86bcb2"/>
+    <rect x="691" y="105" width="43" height="32" rx="5" fill="#f9ead6" stroke="#d1ad7c"/>
+  </g>
+  <g fill="none" stroke="#577697" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)">
+    <path d="M571 100Q617 60 666 100"/>
+    <path d="M619 142Q665 180 713 142"/>
+  </g>
+</svg>
