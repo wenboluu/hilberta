@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HilbertA — Sparse attention for diffusion transformers</title>
+<meta name="description" content="Composite Hilbert ordering, sliding tiles and reciprocal block bridges for FLUX. Interactive method animation and measured image-quality and attention-efficiency results.">
+<link rel="preload" href="assets/patch-demo.jpg" as="image">
+<link rel="icon" href="assets/icon.svg?v=20261110d" type="image/svg+xml"><link rel="stylesheet" href="assets/style.css?v=20261110d"><script src="assets/site.js?v=20261110d" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<nav class="nav" aria-label="Main"><a class="brand" href="#">HilbertA</a><div><a href="#results">Results</a><a href="#scaling">Performance</a><a href="https://github.com/wenboluu/hilberta">GitHub ↗</a></div></nav>
+<main id="main">
+<header class="intro">
+<h1>HilbertA</h1>
+<p class="subtitle">Sparse attention for diffusion transformers</p>
+<p class="summary">Reorder image tokens along a Hilbert curve.<br> Use sliding tiles and a few block connections to preserve spatial communication.</p>
+<div class="links"><a href="https://openreview.net/forum?id=yhMt5V4FNb">Paper ↗</a><a href="https://github.com/wenboluu/hilberta/tree/main">Code ↗</a><span>LoRA weights forthcoming</span></div>
+</header>
+<figure class="method" id="method">
+
+<svg id="method-animation" viewBox="0 0 900 405" role="img" aria-label="Animated composite Hilbert ordering, contiguous tiles, sliding partitions and reciprocal block bridges"></svg>
+<div class="animation-controls"><div class="stages" role="group" aria-label="Animation stage"><button data-stage="0" aria-pressed="true"><span>Hilbert order</span><i></i></button><button data-stage="1" aria-pressed="false"><span>Contiguous tiles</span><i></i></button><button data-stage="2" aria-pressed="false"><span>Sliding partitions</span><i></i></button><button data-stage="3" aria-pressed="false"><span>Block bridges</span><i></i></button></div><button id="play" class="play" aria-label="Pause animation" aria-pressed="true"><span aria-hidden="true">Ⅱ</span></button></div>
+<div class="phase-controls" hidden><span>Layer phase</span><button data-phase="0" aria-pressed="true">1</button><button data-phase="1" aria-pressed="false">2</button><button data-phase="2" aria-pressed="false">3</button><button data-phase="3" aria-pressed="false">4</button></div>
+<p id="animation-caption" class="animation-caption" aria-live="polite">Follow the composite Hilbert curve through spatially neighboring blocks.</p>
+<details class="method-details"><summary>Diagram details</summary><p>1024² image, 4 tiles, K1, no shared image region. Each picture patch represents 64 image tokens. The matrix shows image-to-image attention; text remains globally connected. Phase cycles with transformer layers. K1 selects one external block before reciprocal closure. The picture is a Full FLUX illustration, not a quality comparison.</p></details>
+</figure>
+<section class="results" id="results">
+<div class="section-heading"><h2>Image quality</h2><div class="tabs" role="group" aria-label="Evaluation resolution"><button data-resolution="1024" aria-pressed="true">1024 × 1024</button><button data-resolution="2048" aria-pressed="false">2048 × 2048</button></div></div>
+<p class="section-intro"><strong>4 tiles</strong> stays closer to Full FLUX. <strong>16 tiles</strong> runs faster. Evaluated on 2,048 COCO prompts.</p>
+<div class="quality-grid">
+<div><h3>Distribution &amp; text alignment</h3><div class="table-wrap"><table id="distribution"><thead><tr><th scope="col">Method</th><th scope="col">FID ↓</th><th scope="col">KID ×10³ ↓<small>mean ± std</small></th><th scope="col">CLIP ↑</th></tr></thead><tbody></tbody></table></div></div>
+<div><h3>Fidelity to full attention</h3><div class="table-wrap"><table id="fidelity"><thead><tr><th scope="col">Method</th><th scope="col">LPIPS ↓</th><th scope="col">PSNR ↑<small>dB</small></th><th scope="col">SSIM ↑</th></tr></thead><tbody></tbody></table></div></div>
+</div>
+<p class="table-key"><strong>Bold</strong>: best sparse result. FID / KID compare with COCO; fidelity metrics compare with Full FLUX.</p>
+<p id="resolution-note" class="note"></p>
+<details class="protocol"><summary>Evaluation settings and full-precision data</summary><p>Matched initial latents, 28 steps. KID reports mean ± subset standard deviation, not a confidence interval. Best values use unrounded numbers and do not imply statistical significance.</p><p>Seed 2707, guidance 7.5. CLIP: ViT-L/14 cosine similarity. LPIPS: AlexNet, images resized to 512. PSNR and SSIM: original resolution. FID/KID: torch-fidelity, 100 KID subsets of 1,000 images. The evaluation set has some overlap with early diagnostic captions.</p><p>CLEAR uses official local16. SpargeAttn uses top-k 0.25 with INT8 Q/K and FP8 V; our attention is BF16. Configurations were selected for speed among those tested, not an exhaustive quality–speed comparison.</p><p><a href="data/results.json">Full-precision JSON</a> · <a href="reports/REPORT_STAGE2.html">1024 report</a> · <a href="reports/REPORT_STAGE3.html">2048 report</a></p></details>
+</section>
+<section class="generation" aria-labelledby="generation-title">
+<h2 id="generation-title">28-step denoising time</h2>
+<p class="section-intro">One H100 · batch 1 · excludes VAE decoding</p>
+<div class="timing-grid">
+<div><h3>1024 × 1024</h3><table id="time-1024"><thead><tr><th scope="col">Method</th><th scope="col">Time ↓</th><th scope="col">Speedup ↑</th></tr></thead><tbody></tbody></table></div><div><h3>2048 × 2048</h3><table id="time-2048"><thead><tr><th scope="col">Method</th><th scope="col">Time ↓</th><th scope="col">Speedup ↑</th></tr></thead><tbody></tbody></table></div>
+</div></section>
+<section id="scaling">
+<div class="section-heading"><h2>Resolution scaling</h2><span class="section-meta">Single H100 80 GB · batch 1</span></div>
+<p class="section-intro">Fixed tile counts; measured kernel and denoiser latency.</p>
+
+<div class="chart-grid"><figure><h3>Attention kernel</h3><div id="kernel-legend" class="legend"></div><p class="table-subtitle">Milliseconds per layer · log scale</p><svg id="kernel-chart" viewBox="0 0 440 330" role="img" aria-label="Attention kernel latency at 1024, 2048 and 4096"></svg><figcaption>Resident Q/K/V; packing excluded. Competitor kernels were not measured separately.</figcaption></figure><figure><h3>Denoiser forward</h3><div id="denoiser-legend" class="legend"></div><p class="table-subtitle">Seconds per forward · log scale</p><svg id="denoiser-chart" viewBox="0 0 440 330" role="img" aria-label="Full denoiser forward latency at 1024, 2048 and 4096"></svg><figcaption>CLEAR at 4096: OOM during mask construction. 4096 results are performance-only.</figcaption></figure></div>
+
+<div class="kernel-readout"><div class="readout-title"><h3>Kernel latency</h3><div class="tabs small" role="group" aria-label="Kernel measurement resolution"><button data-kernel-res="0" aria-pressed="true">1024²</button><button data-kernel-res="1" aria-pressed="false">2048²</button><button data-kernel-res="2" aria-pressed="false">4096²</button></div></div><table id="kernel-values"><thead><tr><th scope="col">Method</th><th scope="col">ms / layer ↓</th><th scope="col">Speedup ↑</th></tr></thead><tbody></tbody></table></div>
+<details class="protocol"><summary>Benchmark scope and all measurements</summary><p>Denoising time uses cached text and excludes VAE decoding and file writing. Attention is only part of the denoiser, so kernel speedup does not translate directly to generation speed.</p><p>Kernel latency is phase-weighted across 57 layers, using resident Q/K/V and metadata. Denoiser timing includes one transformer forward. Reported performance uses the paired inference kernel with merged BF16 LoRA. Quality at 1024 used Flex64; 2048 generation used paired. Stage 3 reuses stage-2 speed measurements.</p><p>The same benchmark harness was used for all methods, with warm-up and compilation excluded. Fixed tile counts do not imply linear complexity. There is no quality evaluation at 4096.</p><p><a href="data/efficiency_all_rows.csv" download>All 258 benchmark rows · CSV</a> · <a href="reports/REPORT_STAGE2.html">Full benchmark report</a></p></details>
+</section>
+<section class="reproduction" id="reproduce"><h2>Code &amp; reproduction</h2><p>The code includes inference, kernels, training and evaluation tools, pinned dependencies, and correctness tests. Start with <strong>4 tiles / K1</strong>; use <strong>16 tiles / K3</strong> for more speed.</p><p>Trained LoRA weights are not yet available. The base model alone does not reproduce the reported quality. The new portable training runner has not yet reproduced the historical training runs.</p><div class="text-links"><a href="https://github.com/wenboluu/hilberta/tree/main">Repository ↗</a><a href="https://github.com/wenboluu/hilberta/blob/main/docs/REPRODUCE.md">Reproduction guide ↗</a><a href="reports/REPORT_STAGE1.html">Stage 1 report</a></div></section>
+<p id="load-error" class="error" hidden>Data could not load. The <a href="reports/REPORT_STAGE2.html">static report</a> remains available.</p>
+<noscript><p class="error">JavaScript is needed for the local animation and data views. Read the <a href="reports/REPORT_STAGE2.html">static report</a> for all results.</p></noscript>
+</main>
+<footer><a href="https://github.com/wenboluu/hilberta">HilbertA</a><span>Results from <a href="https://github.com/wenboluu/hilberta-dev/commit/f9ab0b272dd26a005cf9ab8fe6869e24100a0738">f9ab0b2</a>. Animation runs locally; no model inference.</span></footer>
+</body></html>

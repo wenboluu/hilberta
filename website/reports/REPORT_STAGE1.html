@@ -1,0 +1,69 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HilbertA — reported FLUX results</title><link rel="stylesheet" href="../assets/style.css"><style>main{max-width:960px;padding:40px 24px}h1{font-size:30px;letter-spacing:-.5px;margin:28px 0}h2{font-size:23px;margin:32px 0 16px}h3{margin:24px 0 12px}p,ul{margin:16px 0}table{display:block;overflow:auto;max-width:100%;font-size:12px}td,th{white-space:nowrap}a{color:var(--accent)}</style></head><body><main><a href="../index.html">← HilbertA project page</a><h1>FLUX 1024 training and evaluation</h1>
+<h2>Training recipe</h2>
+<p>Frozen BF16 FLUX.1-dev with FP32 LoRA, rank/alpha 32, dropout 0. Teacher supervision uses 2,048 COCO train captions × 2 seeds × 28 trajectory points = 114,688 records. One epoch at global batch 64 gives 1,792 optimizer updates. Training uses Flex64, gradient checkpointing, and AdamW; the 1024 learning rate is 5e-5 and the 2048 adaptation learning rate is 2e-5, with 100 warmup updates. The 2048 variants initialize from their matching 1024 adapters.</p>
+<p>These describe the reported protocol. The public runner's operational commands, resume restrictions, and production-validation limits are in the reproduction guide. Exact historical prompt manifests and release adapters are not bundled.</p>
+<h2>1024 × 1024 quality</h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th style="text-align: right;">FID ↓</th>
+<th style="text-align: right;">KID ×10³ ↓ (mean ± std)</th>
+<th style="text-align: right;">CLIP ↑</th>
+<th style="text-align: right;">LPIPS ↓</th>
+<th style="text-align: right;">PSNR ↑ (dB)</th>
+<th style="text-align: right;">SSIM ↑</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Full FLUX</td>
+<td style="text-align: right;">49.93</td>
+<td style="text-align: right;">10.78 ± 0.82</td>
+<td style="text-align: right;">0.2612</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+<td style="text-align: right;">—</td>
+</tr>
+<tr>
+<td>HilbertA 4-tile K1</td>
+<td style="text-align: right;">50.28</td>
+<td style="text-align: right;">11.26 ± 0.88</td>
+<td style="text-align: right;">0.2611</td>
+<td style="text-align: right;">0.376</td>
+<td style="text-align: right;">15.63</td>
+<td style="text-align: right;">0.665</td>
+</tr>
+<tr>
+<td>HilbertA 16-tile K3</td>
+<td style="text-align: right;">49.79</td>
+<td style="text-align: right;">10.66 ± 0.89</td>
+<td style="text-align: right;">0.2610</td>
+<td style="text-align: right;">0.414</td>
+<td style="text-align: right;">15.09</td>
+<td style="text-align: right;">0.645</td>
+</tr>
+<tr>
+<td>CLEAR local16</td>
+<td style="text-align: right;">49.99</td>
+<td style="text-align: right;">10.10 ± 0.88</td>
+<td style="text-align: right;">0.2608</td>
+<td style="text-align: right;">0.476</td>
+<td style="text-align: right;">13.83</td>
+<td style="text-align: right;">0.604</td>
+</tr>
+<tr>
+<td>SpargeAttn top-k 0.25</td>
+<td style="text-align: right;">53.68</td>
+<td style="text-align: right;">9.26 ± 0.48</td>
+<td style="text-align: right;">0.2466</td>
+<td style="text-align: right;">0.602</td>
+<td style="text-align: right;">12.35</td>
+<td style="text-align: right;">0.540</td>
+</tr>
+</tbody>
+</table>
+<h2>Protocol and scope</h2>
+<p>FLUX.1-dev; 2,048 COCO validation prompts; matched initial latents; seed 2707; 28 steps; guidance 7.5; up to 512 text tokens. FID/KID compare with real COCO images. LPIPS (AlexNet at 512 pixels), PSNR, and SSIM compare with matched Full FLUX outputs. CLIP is ViT-L/14 image/text cosine. KID uses 100 subsets of 1,000 images; subset standard deviation is not a confidence interval. The evaluation set overlaps earlier diagnostic captions and is not claimed entirely unseen.</p>
+<p>HilbertA uses composite Hilbert ordering, four sliding phases, reciprocal block bridges, no shared image region, and global text attention. Its rank/alpha-32 LoRA configurations are 4-tile K1 and 16-tile K3. Quality at 1024 used Flex64; quality at 2048 used the paired kernel. Performance uses merged BF16 LoRA and the paired kernel. These are reported measurements, not new validations of the portable runners.</p>
+<p>CLEAR uses its official local16 checkpoint; SpargeAttn uses top-k 0.25 with INT8 Q/K and FP8 V. Configurations were selected for speed among those tested, not from an exhaustive quality–speed sweep. At 2048, our adapters were adapted at 2048; CLEAR uses its official 1024-trained checkpoint and SpargeAttn is training-free. The 2048 timing rows reuse the original benchmark rather than a new timing of the final 2048 adapters.</p><p><a href="../data/results.json">Full-precision JSON</a> · <a href="../data/efficiency_all_rows.csv">All benchmark rows</a> · <a href="https://github.com/wenboluu/hilberta/blob/main/docs/REPRODUCE.md">Reproduction guide</a></p></main></body></html>

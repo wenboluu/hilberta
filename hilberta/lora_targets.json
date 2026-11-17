@@ -1,0 +1,1532 @@
+{
+  "scope": "proposed attention projections plus native single-block fused output; meta-only, no training",
+  "module_count": 304,
+  "per_rank_parameters": 2334720,
+  "rank_parameters": {
+    "16": 37355520,
+    "32": 74711040,
+    "64": 149422080
+  },
+  "modules": [
+    {
+      "name": "transformer_blocks.0.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.0.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.0.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.0.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.0.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.0.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.0.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.0.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.1.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.1.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.1.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.1.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.1.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.1.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.1.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.1.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.2.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.2.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.2.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.2.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.2.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.2.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.2.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.2.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.3.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.3.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.3.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.3.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.3.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.3.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.3.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.3.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.4.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.4.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.4.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.4.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.4.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.4.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.4.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.4.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.5.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.5.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.5.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.5.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.5.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.5.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.5.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.5.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.6.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.6.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.6.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.6.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.6.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.6.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.6.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.6.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.7.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.7.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.7.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.7.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.7.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.7.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.7.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.7.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.8.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.8.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.8.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.8.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.8.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.8.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.8.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.8.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.9.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.9.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.9.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.9.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.9.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.9.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.9.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.9.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.10.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.10.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.10.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.10.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.10.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.10.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.10.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.10.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.11.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.11.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.11.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.11.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.11.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.11.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.11.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.11.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.12.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.12.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.12.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.12.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.12.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.12.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.12.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.12.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.13.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.13.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.13.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.13.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.13.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.13.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.13.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.13.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.14.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.14.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.14.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.14.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.14.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.14.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.14.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.14.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.15.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.15.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.15.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.15.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.15.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.15.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.15.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.15.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.16.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.16.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.16.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.16.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.16.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.16.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.16.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.16.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.17.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.17.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.17.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.17.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.17.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.17.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.17.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.17.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.18.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.18.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.18.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.18.attn.to_out.0",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.18.attn.add_q_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.18.attn.add_k_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.18.attn.add_v_proj",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "transformer_blocks.18.attn.to_add_out",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.0.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.0.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.0.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.0.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.1.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.1.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.1.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.1.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.2.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.2.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.2.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.2.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.3.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.3.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.3.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.3.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.4.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.4.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.4.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.4.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.5.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.5.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.5.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.5.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.6.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.6.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.6.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.6.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.7.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.7.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.7.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.7.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.8.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.8.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.8.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.8.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.9.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.9.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.9.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.9.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.10.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.10.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.10.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.10.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.11.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.11.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.11.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.11.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.12.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.12.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.12.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.12.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.13.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.13.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.13.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.13.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.14.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.14.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.14.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.14.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.15.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.15.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.15.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.15.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.16.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.16.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.16.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.16.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.17.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.17.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.17.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.17.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.18.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.18.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.18.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.18.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.19.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.19.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.19.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.19.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.20.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.20.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.20.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.20.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.21.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.21.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.21.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.21.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.22.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.22.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.22.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.22.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.23.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.23.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.23.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.23.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.24.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.24.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.24.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.24.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.25.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.25.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.25.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.25.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.26.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.26.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.26.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.26.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.27.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.27.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.27.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.27.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.28.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.28.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.28.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.28.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.29.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.29.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.29.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.29.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.30.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.30.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.30.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.30.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.31.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.31.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.31.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.31.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.32.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.32.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.32.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.32.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.33.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.33.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.33.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.33.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.34.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.34.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.34.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.34.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.35.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.35.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.35.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.35.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.36.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.36.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.36.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.36.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.37.proj_out",
+      "in": 15360,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.37.attn.to_q",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.37.attn.to_k",
+      "in": 3072,
+      "out": 3072
+    },
+    {
+      "name": "single_transformer_blocks.37.attn.to_v",
+      "in": 3072,
+      "out": 3072
+    }
+  ]
+}

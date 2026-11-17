@@ -1,0 +1,9 @@
+{
+  "hilberta-pipeline": {
+    "paper": "HilbertA: Hilbert-Curve\u2013Aligned Sparse Attention for 2D Structured Data",
+    "source_file": "figures/hiberta_pipeline.pdf",
+    "source_sha256": "73b8f54fd42e1d10cd1ca649ab685a586455ae22ae05bef59ed940229bf36def",
+    "preview": "PDF page 1 rendered with Poppler at 1800px; no content edits",
+    "caption": "Reordering, tiling, and sliding; the release additionally implements reciprocal block bridges."
+  }
+}
